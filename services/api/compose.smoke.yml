@@ -1,0 +1,15 @@
+# Merge with the root compose file for a credentials-free P3 startup check.
+# The gateway remains the actual P2 scaffold; this does not simulate a purchase.
+services:
+  api:
+    env_file: !reset []
+  mcp:
+    env_file: !reset []
+  nginx:
+    ports: !override ["127.0.0.1:18080:80"]
+  web:
+    env_file: !reset []
+  grafana:
+    env_file: !reset []
+  import:
+    env_file: !reset []
