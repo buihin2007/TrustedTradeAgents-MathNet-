@@ -49,6 +49,15 @@ Only edit your own folders. Need a change elsewhere: ask its owner.
 - Connections: Supabase session pooler allows 15 clients per role by default, shared by the whole team. Keep each service's DB pool at 2 connections max.
 - Generated SQL runs as: `BEGIN READ ONLY; SET LOCAL ROLE search_ro; SET LOCAL statement_timeout = '2s'; ...`.
 
+## Web app (apps/web)
+
+- Next.js 16 App Router, `@supabase/ssr`. `proxy.ts` refreshes the session and redirects signed-out users to `/login`; server code verifies with `getClaims()`, never `getSession()`.
+- The browser calls the buyer API on the same origin (`/api/...` through nginx) with `Authorization: Bearer <Supabase access token>` (see `lib/api.ts`).
+- `apps/web/lib/types.ts` is the JSON contract between web and `services/api`: P3 returns exactly these fields.
+- `NEXT_PUBLIC_*` values are baked in at build time: after changing them run `docker compose up -d --build web`.
+- Local dev without docker: `cd apps/web && npm install && API_PROXY_URL=http://localhost:8080 npm run dev` (needs the `NEXT_PUBLIC_*` vars in `apps/web/.env.local`).
+- Status colours mean the same everywhere: blue `auto` = automatic, orange `human` = needs a person, black `blocked`.
+
 ## Contracts
 
 `packages/contracts` is the single source of truth for every request and response between `api` and `mcp`.
@@ -71,7 +80,7 @@ uv add --editable ../../packages/contracts
 - Between milestones: `git pull origin main` into your branch.
 - `main` must always start with `docker compose up --build`.
 - Never commit `.env` or `data/` (product JSON is 87 MB).
-- Lock versions (`uv.lock`, `pnpm-lock.yaml`). No library upgrades mid-hackathon.
+- Lock versions (`uv.lock`, `apps/web/package-lock.json`). No library upgrades mid-hackathon.
 
 ## Commands
 
