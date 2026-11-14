@@ -92,7 +92,7 @@ async def gateway_runtime():
             os.getenv("OPENROUTER_API_KEY", ""),
             os.getenv("JEV_MODEL") or "~typesafe/jev-latest",
             os.getenv("LLM_MODEL", ""),
-            os.getenv("EMBED_MODEL") or "openai/text-embedding-3-small",
+            os.getenv("EMBED_MODEL") or "baai/bge-m3",
         )
         yield Runtime(
             pool=pool,

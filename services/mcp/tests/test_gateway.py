@@ -404,7 +404,7 @@ async def test_concurrent_orders_respect_org_budget_and_can_reject_held():
 async def test_semantic_match_with_no_full_text_overlap(monkeypatch):
     async with gateway() as clients:
         agent, user, _, _, judge, db = clients
-        vector = "[" + ",".join(["1"] + ["0"] * 1535) + "]"
+        vector = "[" + ",".join(["1"] + ["0"] * 1023) + "]"
 
         async def embed(_):
             return vector

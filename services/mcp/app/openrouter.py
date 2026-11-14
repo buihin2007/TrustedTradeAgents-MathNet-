@@ -2,12 +2,16 @@
 
 import asyncio
 import json
+import os
 from math import isfinite
 
 import httpx
 from tta_contracts import JEV_WRITE_TOOLS
 from tta_contracts import ReasonCode as Reason
 from tta_contracts.limits import JEV_ALLOW, JEV_BLOCK, JEV_TIMEOUT_S
+
+# Must match wholesaler.products.embedding (vector(1024) since migration 0003, model baai/bge-m3).
+EMBED_DIMS = int(os.getenv("EMBED_DIMS", "1024"))
 
 COMMON = {
     "serves_intent": "The proposed tool call reasonably serves the original buying request.",
@@ -77,7 +81,7 @@ class OpenRouter:
         try:
             data = await self._post("v1/embeddings", {"model": self.embed_model, "input": query}, 3)
             embedding = data["data"][0]["embedding"]
-            if len(embedding) != 1536 or not all(
+            if len(embedding) != EMBED_DIMS or not all(
                 type(value) in (float, int) and isfinite(value) for value in embedding
             ):
                 return None
