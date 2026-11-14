@@ -12,6 +12,7 @@ from tta_contracts import (
     Mandate,
     MandateLimits,
     Order,
+    ReasonCode,
     RejectOrderRequest,
     SetAgentStatusRequest,
 )
@@ -65,6 +66,26 @@ async def owned_order(store, profile, order_id):
     return item
 
 
+def reconciliation_audit(item, order):
+    kind, decision = {
+        "placed": (
+            "order.placed",
+            AuditDecision.APPROVED if item.status == "held" or order.decided_by else AuditDecision.BUY_AUTO,
+        ),
+        "held": ("gate.held", AuditDecision.APPROVAL_REQUIRED),
+        "blocked": ("order.blocked", AuditDecision.BLOCKED),
+        "rejected": ("user.rejected", AuditDecision.REJECTED),
+    }[order.status]
+    return {
+        "event_type": kind,
+        "summary": f"Reconciled gateway order state: {order.status}",
+        "decision": decision,
+        "actor": ActorType.GATEWAY,
+        "trace_id": order.trace_id or current_trace_id(),
+        "details": {"order_id": order.order_id, "reasons": [r.value for r in order.reasons]},
+    }
+
+
 @router.post("/requests", response_model=RequestRecord, status_code=202)
 async def create_request(body: CreateRequest, request: Request, user: User, profile: Buyer, store: Store):
     item = await store.create_request(profile, body.text)
@@ -92,8 +113,8 @@ async def request_detail(request_id: UUID, request: Request, user: User, profile
             order = await gateway.call("get_order", {"order_id": str(item.order_id)}, Order, actor="user")
         if order.order_id != str(item.order_id) or order.intent_id != str(item.intent_id):
             raise HTTPException(502, "Gateway returned an unrelated order")
-        if item.status != order.status:
-            await store.record_order(profile, item.id, order)
+        if item.status != order.status or item.step == "sync_required":
+            await store.record_order(profile, item.id, order, audit=reconciliation_audit(item, order))
             item = await owned_request(store, profile, request_id)
         item.order = order
     return item
@@ -145,7 +166,7 @@ async def approvals(
             if order.status == "held":
                 result.append(order)
             else:
-                await store.record_order(profile, item.id, order)
+                await store.record_order(profile, item.id, order, audit=reconciliation_audit(item, order))
     return result
 
 
@@ -171,14 +192,22 @@ async def decide_order(
             if body.option_index >= len(existing.options):
                 raise HTTPException(422, "Option index is outside this order's options")
             arguments = ApproveOrderRequest(order_id=str(order_id), option_index=body.option_index)
+            if (
+                ReasonCode.PRICE_MOVED in existing.reasons
+                or ReasonCode.PRICE_MOVED in existing.options[body.option_index].reasons
+            ):
+                if body.expected_total_eur is None:
+                    raise HTTPException(422, "Confirm the displayed price with expected_total_eur before approving")
             tool = "approve_order"
         else:
             arguments = RejectOrderRequest(order_id=str(order_id), note=body.note)
             tool = "reject_order"
-        order = await gateway.call(tool, arguments.model_dump(mode="json"), Order, actor="user")
+        payload = arguments.model_dump(mode="json")
+        if body.action == "approve" and body.expected_total_eur is not None:
+            payload["expected_total_eur"] = str(body.expected_total_eur)
+        order = await gateway.call(tool, payload, Order, actor="user")
     if order.order_id != str(order_id) or order.intent_id != str(item.intent_id):
         raise HTTPException(502, "Gateway returned an unrelated order")
-    await store.record_order(profile, item.id, order)
     # The returned state is authoritative, including a new hold after repricing.
     kind, decision = {
         "placed": ("user.approved", AuditDecision.APPROVED),
@@ -186,15 +215,18 @@ async def decide_order(
         "held": ("gate.held", AuditDecision.APPROVAL_REQUIRED),
         "blocked": ("order.blocked", AuditDecision.BLOCKED),
     }[order.status]
-    await store.append_event(
+    await store.record_order(
         profile,
         item.id,
-        kind,
-        f"Gateway returned {order.status} after buyer decision",
-        actor=ActorType.GATEWAY if order.status in {"held", "blocked"} else ActorType.USER,
-        decision=decision,
-        trace_id=order.trace_id or current_trace_id(),
-        details={"order_id": str(order_id), "action": body.action, "reasons": [r.value for r in order.reasons]},
+        order,
+        audit={
+            "event_type": kind,
+            "summary": f"Gateway returned {order.status} after buyer decision",
+            "actor": ActorType.GATEWAY if order.status in {"held", "blocked"} else ActorType.USER,
+            "decision": decision,
+            "trace_id": order.trace_id or current_trace_id(),
+            "details": {"order_id": str(order_id), "action": body.action, "reasons": [r.value for r in order.reasons]},
+        },
     )
     return order
 
@@ -211,11 +243,10 @@ async def mandate(request: Request, user: User, profile: Buyer):
 @router.put("/mandate", response_model=Mandate)
 async def update_mandate(body: MandateLimits, request: Request, user: User, profile: Buyer, store: Store):
     if not (
-        0 <= body.auto_limit_eur <= body.order_limit_eur
-        and body.weekly_budget_eur >= 0
-        and body.price_tolerance_pct >= 0
+        0 <= body.auto_limit_eur <= body.order_limit_eur <= body.weekly_budget_eur <= 1_000_000_000
+        and 0 <= body.price_tolerance_pct <= 100
     ):
-        raise HTTPException(422, "Mandate limits must be non-negative and auto limit <= order limit")
+        raise HTTPException(422, "Require 0 <= auto <= order <= weekly <= 1000000000 and tolerance from 0 to 100")
     async with request.app.state.gateway.session(user) as gateway:
         result = await gateway.call(
             "update_mandate",
@@ -242,9 +273,14 @@ async def update_mandate(body: MandateLimits, request: Request, user: User, prof
 async def set_status(status, request, user, profile, store):
     body = SetAgentStatusRequest(agent_id=str(profile.agent_id), status=status)
     async with request.app.state.gateway.session(user) as gateway:
-        # The shared package defines the request but no dedicated response model.
-        # Keep the REST response fixed; the gateway's success response is opaque.
-        await gateway.call("set_agent_status", body.model_dump(mode="json"), object, actor="user")
+        result = await gateway.call(
+            "set_agent_status",
+            body.model_dump(mode="json"),
+            SetAgentStatusRequest,
+            actor="user",
+        )
+    if result.agent_id != body.agent_id or result.status != body.status:
+        raise HTTPException(502, "Gateway did not confirm the requested agent status")
     await store.append_event(
         profile,
         None,

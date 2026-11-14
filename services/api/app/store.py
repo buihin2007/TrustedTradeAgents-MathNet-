@@ -191,7 +191,7 @@ class PostgresStore:
                 (request_id,),
             )
 
-    async def record_order(self, profile: Profile, request_id: UUID, order: Order):
+    async def record_order(self, profile: Profile, request_id: UUID, order: Order, *, audit=None):
         async with self.pool.connection() as conn:
             await self.save_options(profile, request_id, order.options, connection=conn)
             await conn.execute(
@@ -206,6 +206,8 @@ class PostgresStore:
                     profile.org_id,
                 ),
             )
+            if audit is not None:
+                await self.append_event(profile, request_id, connection=conn, **audit)
 
     async def append_event(
         self,
@@ -217,6 +219,7 @@ class PostgresStore:
         actor=ActorType.AGENT,
         details=None,
         trace_id=None,
+        connection=None,
     ):
         event = AuditEvent(
             ts=datetime.now(UTC),
@@ -232,7 +235,8 @@ class PostgresStore:
             },
             trace_id=trace_id or current_trace_id(),
         )
-        async with self.pool.connection() as conn:
+
+        async def write(conn):
             # The schema has a single global chain. Serialize head-read + insertion
             # across workers/connections, including events for different buyers.
             await conn.execute("SELECT pg_advisory_xact_lock(20261115, 3)")
@@ -261,6 +265,12 @@ class PostgresStore:
                 )
             ).fetchone()
             event.seq = row["seq"]
+
+        if connection is not None:
+            await write(connection)
+        else:
+            async with self.pool.connection() as conn:
+                await write(conn)
         return event
 
     async def audit(self, profile: Profile, request_id=None, decision=None, limit=50, offset=0):

@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -128,3 +129,47 @@ async def test_invalid_tool_response_is_not_retried():
         with pytest.raises(GatewayUnavailable, match="shared contract"):
             await session.call("get_facets", {}, Facets)
     assert len(client.calls) == 1
+
+
+async def test_real_mcp_agent_reconnect_keeps_user_session_usable():
+    server = FastMCP("reconnect-test")
+
+    @server.tool
+    def get_facets() -> dict:
+        return {"ok": True}
+
+    @server.tool
+    def register_intent() -> dict:
+        return {"ok": True}
+
+    @server.tool
+    def search_products() -> dict:
+        return {"ok": True}
+
+    failed = False
+    tokens = []
+
+    def factory(url, **kwargs):
+        nonlocal failed
+        tokens.append(kwargs["auth"])
+        client = Client(server)
+        original_call = client.call_tool
+
+        async def call_tool(name, *args, **call_kwargs):
+            nonlocal failed
+            if name == "search_products" and not failed:
+                failed = True
+                raise ConnectionError("simulated connection loss")
+            return await original_call(name, *args, **call_kwargs)
+
+        client.call_tool = call_tool
+        return client
+
+    gateway = Gateway(Settings(agent_key="agent-key"), client_factory=factory)
+    async with asyncio.timeout(5):
+        async with gateway.session(Identity(str(USER_ID), "user-jwt")) as session:
+            assert await session.call("get_facets", {}, dict) == {"ok": True}
+            assert await session.call("register_intent", {}, dict, actor="user") == {"ok": True}
+            assert await session.call("search_products", {}, dict) == {"ok": True}
+            assert await session.call("register_intent", {}, dict, actor="user") == {"ok": True}
+    assert tokens == ["agent-key", "user-jwt", "agent-key"]

@@ -3,7 +3,10 @@
 import asyncio
 import json
 from contextlib import AsyncExitStack, asynccontextmanager
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 
+import httpx
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 from opentelemetry.propagate import inject
@@ -25,6 +28,57 @@ class GatewayDenied(Exception):
         super().__init__("Gateway denied the operation")
 
 
+def error_leaves(error):
+    """HTTP transports may deliver failures inside an AnyIO exception group."""
+    if isinstance(error, BaseExceptionGroup):
+        return [leaf for child in error.exceptions for leaf in error_leaves(child)]
+    if isinstance(error, RuntimeError) and error.__cause__ is not None:
+        return error_leaves(error.__cause__)
+    return [error]
+
+
+def classify_failure(error, attempt):
+    errors = error_leaves(error)
+    for item in errors:
+        if isinstance(item, ToolError):
+            reason = next((code for code in ReasonCode if code.value in str(item)), None)
+            raise GatewayDenied(reason) from None
+    statuses = [getattr(getattr(item, "response", None), "status_code", None) for item in errors]
+    if any(status in {401, 403} for status in statuses):
+        raise GatewayDenied(ReasonCode.FORBIDDEN) from None
+    if any(status is not None and 400 <= status < 500 and status != 429 for status in statuses):
+        raise GatewayUnavailable("Gateway rejected the request; check the shared tool contract") from None
+    if any(getattr(item, "code", None) in {-32600, -32601, -32602} for item in errors):
+        raise GatewayUnavailable("Gateway rejected the request; check the shared tool contract") from None
+    transient = all(
+        isinstance(item, (ConnectionError, TimeoutError, OSError, httpx.TransportError))
+        or type(item).__module__.split(".")[0] in {"httpx", "httpx2", "httpcore", "httpcore2"}
+        or getattr(item, "code", None) in {-32001, -32603}
+        for item in errors
+    )
+    if not transient:
+        raise GatewayUnavailable("Gateway operation failed") from None
+    delay = 0.25 * (2**attempt)
+    for item in errors:
+        response = getattr(item, "response", None)
+        if response is None or response.status_code not in {429, 503}:
+            continue
+        retry_after = response.headers.get("retry-after")
+        if retry_after:
+            try:
+                seconds = float(retry_after)
+            except ValueError:
+                try:
+                    seconds = (parsedate_to_datetime(retry_after) - datetime.now(UTC)).total_seconds()
+                except (ValueError, TypeError, OverflowError):
+                    seconds = delay
+            if seconds > 5:
+                # Do not retry sooner than requested or park a background task for minutes.
+                raise GatewayUnavailable("Gateway is busy; retry later after checking order status") from None
+            delay = max(delay, seconds)
+    return delay
+
+
 class Gateway:
     def __init__(self, settings: Settings, client_factory=Client):
         self.settings = settings
@@ -44,6 +98,7 @@ class GatewaySession:
         self.stack = stack
         self.clients = {}
         self.schemas = {}
+        self.contexts = {}
 
     async def call(self, tool: str, arguments: dict, result_type, *, actor="agent"):
         if not allowed(tool, actor):
@@ -68,7 +123,9 @@ class GatewaySession:
         for attempt in range(attempts):
             try:
                 if actor not in self.clients:
-                    client = await self.stack.enter_async_context(
+                    context = await self.stack.enter_async_context(AsyncExitStack())
+                    self.contexts[actor] = context
+                    client = await context.enter_async_context(
                         self.factory(self.settings.mcp_url, auth=token, timeout=15)
                     )
                     tools = await client.list_tools()
@@ -104,9 +161,16 @@ class GatewaySession:
                 raise GatewayUnavailable("Gateway response does not match the shared contract") from None
             except GatewayUnavailable:
                 raise
-            except Exception:
+            except Exception as exc:
+                delay = classify_failure(exc, attempt)
                 self.clients.pop(actor, None)
+                context = self.contexts.pop(actor, None)
+                if context:
+                    try:
+                        await context.aclose()
+                    except Exception:
+                        pass  # preserve the classified error; old sessions must not affect a retry
                 if attempt + 1 == attempts:
                     raise GatewayUnavailable("Gateway is temporarily unavailable") from None
-                await asyncio.sleep(0.25 * (2**attempt))
+                await asyncio.sleep(delay)
         raise GatewayUnavailable("Gateway is temporarily unavailable")

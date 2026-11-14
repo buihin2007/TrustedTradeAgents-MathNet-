@@ -44,7 +44,11 @@ def candidates(parsed: ParsedRequest, hits: list[ProductHit], offers: list[Offer
         raise ValueError("Quantity and unit are required")
     prices = {o.product_id: o for o in offers}
     result = []
+    seen = set()
     for product in hits:
+        if product.product_id in seen:
+            continue
+        seen.add(product.product_id)
         offer = prices.get(product.product_id)
         size = unit_size(product, parsed.quantity_unit)
         if (
@@ -67,13 +71,23 @@ def candidates(parsed: ParsedRequest, hits: list[ProductHit], offers: list[Offer
     return result
 
 
-def build_options(parsed: ParsedRequest, hits: list[ProductHit], offers: list[Offer]) -> list[OptionPreview]:
+def build_options(
+    parsed: ParsedRequest,
+    hits: list[ProductHit],
+    offers: list[Offer],
+    *,
+    substitute_for: dict[int, int] | None = None,
+) -> list[OptionPreview]:
     items = candidates(parsed, hits, offers)
     full = [item for item in items if item.enough]
     results = []
     seen = set()
 
     def add(label, lines, total, quantity):
+        for line in lines:
+            line.substitute_for = (substitute_for or {}).get(line.product_id)
+        if any(line.substitute_for is not None for line in lines):
+            label = "split_or_substitute"
         signature = tuple(sorted((line.product_id, line.quantity_units) for line in lines))
         if signature in seen:
             return

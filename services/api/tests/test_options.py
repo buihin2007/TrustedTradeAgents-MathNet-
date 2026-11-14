@@ -136,3 +136,8 @@ def test_incomplete_split_is_never_submitted():
 def test_pcs_means_sales_units_even_without_volume_or_weight():
     options = build_options(request(5, "pcs"), [hit(unit_volume_l=None, unit_weight_kg=None)], [offer()])
     assert options[0].option.lines[0].quantity_units == 10
+
+
+def test_duplicate_search_hits_do_not_double_count_stock_in_split():
+    product = hit(1)
+    assert build_options(request(40), [product, product], [offer(1, available_on_date=20)]) == []

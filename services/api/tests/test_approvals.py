@@ -113,7 +113,7 @@ def mandate():
 
 def test_mandate_and_agent_controls_use_profile_agent_and_user_identity(api):
     client, _, store, gateway = api
-    gateway.responses.update(get_mandate=mandate(), update_mandate=mandate(), set_agent_status={"ok": True})
+    gateway.responses.update(get_mandate=mandate(), update_mandate=mandate(), set_agent_status=lambda args: args)
     assert client.get("/api/mandate").status_code == 200
     assert client.put("/api/mandate", json={"auto_limit_eur": "150", "order_limit_eur": "600"}).status_code == 200
     assert client.post("/api/agent/pause").json()["status"] == "paused"
@@ -131,9 +131,71 @@ def test_mandate_and_agent_controls_use_profile_agent_and_user_identity(api):
         {"weekly_budget_eur": -1},
         {"price_tolerance_pct": -1},
         {"auto_limit_eur": "NaN"},
+        {"order_limit_eur": 600, "weekly_budget_eur": 500},
+        {"price_tolerance_pct": 101},
     ],
 )
 def test_invalid_mandate_never_reaches_gateway(api, limits):
     client, _, _, gateway = api
     assert client.put("/api/mandate", json=limits).status_code == 422
     assert gateway.calls == []
+
+
+def test_price_moved_requires_explicit_confirmation_of_displayed_total(api):
+    held_order(api)
+    client, _, _, gateway = api
+    gateway.responses["get_order"].reasons = [ReasonCode.PRICE_MOVED]
+    response = client.post(f"/api/approvals/{ORDER_ID}", json={"action": "approve"})
+    assert response.status_code == 422
+    assert "expected_total_eur" in response.json()["detail"]
+    assert [call[0] for call in gateway.calls] == ["get_order"]
+
+
+def test_displayed_price_is_forwarded_to_p2_approval_signature(api):
+    held_order(api)
+    client, _, store, gateway = api
+    gateway.responses["get_order"].reasons = [ReasonCode.PRICE_MOVED]
+    response = client.post(
+        f"/api/approvals/{ORDER_ID}",
+        json={
+            "action": "approve",
+            "option_index": 0,
+            "expected_total_eur": "48.00",
+        },
+    )
+    assert response.status_code == 200
+    assert gateway.calls[-1] == (
+        "approve_order",
+        {
+            "order_id": ORDER_ID,
+            "option_index": 0,
+            "expected_total_eur": "48.00",
+        },
+        "user",
+    )
+    assert store.events[-1].decision == "approved"
+
+
+@pytest.mark.parametrize("total", ["NaN", "Infinity", "-1"])
+def test_invalid_displayed_price_is_rejected_before_gateway(api, total):
+    held_order(api)
+    client, _, _, gateway = api
+    assert (
+        client.post(
+            f"/api/approvals/{ORDER_ID}",
+            json={
+                "action": "approve",
+                "expected_total_eur": total,
+            },
+        ).status_code
+        == 422
+    )
+    assert gateway.calls == []
+
+
+def test_agent_pause_requires_gateway_confirmation_of_correct_status(api):
+    client, _, store, gateway = api
+    gateway.responses["set_agent_status"] = {"agent_id": str(AGENT_ID), "status": "active"}
+    response = client.post("/api/agent/pause")
+    assert response.status_code == 502
+    assert store.events == []

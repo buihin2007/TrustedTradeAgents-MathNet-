@@ -21,6 +21,7 @@ from tta_contracts import (
 from .gateway import GatewayDenied, GatewayUnavailable
 from .llm import LLMUnavailable
 from .options import build_options
+from .substitutions import shortage_options
 
 tracer = trace.get_tracer("tta.api")
 
@@ -57,6 +58,37 @@ class Pipeline:
             async def ask(question, choices):
                 await self.store.ask(profile, request_id, question, choices)
                 await event("agent.asked_user", question, AuditDecision.ASK_USER)
+
+            received_order = None
+            submission_started = False
+
+            async def fail(message, interrupted=False):
+                if received_order is not None:
+                    # A confirmed external side effect must not become a generic
+                    # failed purchase merely because a later local write failed.
+                    await self.store.update_request(
+                        profile,
+                        request_id,
+                        status=received_order.status.value,
+                        order_id=UUID(received_order.order_id),
+                        step="sync_required",
+                        error="Gateway order result received; local details or audit need reconciliation",
+                    )
+                else:
+                    await self.store.update_request(
+                        profile,
+                        request_id,
+                        status="failed",
+                        step="submission_unknown"
+                        if submission_started
+                        else ("interrupted" if interrupted else "failed"),
+                        error=(
+                            "Order submission could not be confirmed. "
+                            "Check order status before creating another request."
+                            if submission_started
+                            else message
+                        ),
+                    )
 
             try:
                 request = await self.store.request(profile, request_id)
@@ -150,6 +182,14 @@ class Pipeline:
                     await step("building_options")
                     with self.tracer.start_as_current_span("request.options", record_exception=False):
                         options = build_options(parsed, search.hits[:50], quote.offers)
+                        quote, options = await shortage_options(
+                            gateway,
+                            parsed,
+                            intent.intent_id,
+                            search.hits[:50],
+                            quote,
+                            options,
+                        )
                     if not options:
                         await ask(
                             "No complete, priced option is available for this quantity and date. "
@@ -178,26 +218,34 @@ class Pipeline:
                         idempotency_key=f"{request_id}:{intent.intent_id}",
                     )
                     with self.tracer.start_as_current_span("request.submit", record_exception=False):
+                        submission_started = True
                         order = await gateway.call("place_order", proposal.model_dump(mode="json"), Order)
                     if order.intent_id != intent.intent_id:
                         raise GatewayUnavailable("Gateway order does not belong to the registered intent")
-                    await self.store.record_order(profile, request_id, order)
+                    UUID(order.order_id)
+                    received_order = order
                     kind, decision = {
                         "placed": ("order.placed", AuditDecision.BUY_AUTO),
                         "held": ("gate.held", AuditDecision.APPROVAL_REQUIRED),
                         "blocked": ("order.blocked", AuditDecision.BLOCKED),
                         "rejected": ("user.rejected", AuditDecision.REJECTED),
                     }[order.status]
-                    await event(
-                        kind,
-                        f"Gateway returned {order.status}",
-                        decision,
-                        {
-                            "order_id": order.order_id,
-                            "reasons": [r.value for r in order.reasons],
-                            "total_eur": str(order.total_eur) if order.total_eur is not None else None,
+                    await self.store.record_order(
+                        profile,
+                        request_id,
+                        order,
+                        audit={
+                            "event_type": kind,
+                            "summary": f"Gateway returned {order.status}",
+                            "decision": decision,
+                            "actor": ActorType.GATEWAY,
+                            "trace_id": trace_id,
+                            "details": {
+                                "order_id": order.order_id,
+                                "reasons": [r.value for r in order.reasons],
+                                "total_eur": str(order.total_eur) if order.total_eur is not None else None,
+                            },
                         },
-                        actor=ActorType.GATEWAY,
                     )
             except GatewayDenied as exc:
                 await self.store.update_request(
@@ -215,31 +263,13 @@ class Pipeline:
                     actor=ActorType.GATEWAY,
                 )
             except asyncio.CancelledError:
-                await self.store.update_request(
-                    profile,
-                    request_id,
-                    status="failed",
-                    step="interrupted",
-                    error="Processing was interrupted; check order status before creating another request",
-                )
+                await fail("Processing was interrupted; check order status before creating another request", True)
                 raise
             except (GatewayUnavailable, LLMUnavailable) as exc:
-                await self.store.update_request(
-                    profile,
-                    request_id,
-                    status="failed",
-                    step="failed",
-                    error=str(exc),
-                )
+                await fail(str(exc))
             except Exception:
                 # Database/validation internals must not leak secrets through the polling API.
-                await self.store.update_request(
-                    profile,
-                    request_id,
-                    status="failed",
-                    step="failed",
-                    error="Request processing failed; check order status before retrying",
-                )
+                await fail("Request processing failed; check order status before retrying")
 
 
 class Tasks:

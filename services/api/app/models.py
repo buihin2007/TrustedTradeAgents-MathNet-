@@ -28,6 +28,7 @@ class ApprovalRequest(StrictModel):
     action: Literal["approve", "reject"]
     option_index: int = Field(default=0, ge=0, le=3)
     note: str | None = Field(default=None, max_length=500)
+    expected_total_eur: Decimal | None = Field(default=None, ge=0)
 
 
 class ParsedRequest(StrictModel):

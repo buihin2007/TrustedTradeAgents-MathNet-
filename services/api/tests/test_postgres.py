@@ -10,17 +10,21 @@ import os
 from pathlib import Path
 from uuid import UUID, uuid4
 
+import httpx
 import psycopg
 import pytest
 import pytest_asyncio
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
-from tta_contracts import AuditEvent, verify_chain
+from tta_contracts import AuditEvent, PricedLine, PricedOption, verify_chain
 
+from app.auth import Identity, current_user
+from app.config import Settings
+from app.main import create_app
 from app.models import Profile
 from app.options import build_options
 from app.store import Conflict, PostgresStore
-from tests.factories import AGENT_ID, ORG_ID, PROFILE, hit, offer, order, parsed
+from tests.factories import AGENT_ID, ORG_ID, PROFILE, FakeGateway, FakeLLM, hit, offer, order, parsed
 
 pytestmark = pytest.mark.database
 
@@ -130,3 +134,81 @@ async def test_real_audit_visibility_and_pagination(db):
     assert len(await db.audit(first, limit=1, offset=1)) == 1
     assert len(await db.audit(other)) == 1
     assert await db.request_for_order(other, UUID("00000000-0000-0000-0000-000000000003")) is None
+
+
+async def test_order_state_and_audit_roll_back_together(db):
+    request = await db.create_request(PROFILE, "milk")
+    previews = build_options(parsed(), [hit()], [offer()])
+    await db.save_options(PROFILE, request.id, previews)
+    with pytest.raises(ValueError):
+        await db.record_order(
+            PROFILE,
+            request.id,
+            order(),
+            audit={
+                "event_type": "order.placed",
+                "summary": None,
+            },
+        )
+    result = await db.request(PROFILE, request.id)
+    assert result.status == "running"
+    assert result.order_id is None
+    assert result.options[0].option.lines[0].quantity_units == 40
+    assert await db.audit(PROFILE, request_id=request.id) == []
+
+
+@pytest.mark.parametrize(
+    "status,decision",
+    [
+        ("placed", "buy_auto"),
+        ("held", "approval_required"),
+        ("blocked", "blocked"),
+    ],
+)
+async def test_rest_pipeline_persists_gateway_outcome_and_audit_in_real_db(db, status, decision):
+    priced = PricedOption(
+        label="best_match",
+        total_eur="48.40",
+        lines=[
+            PricedLine(
+                product_id=1,
+                name_en="Milk",
+                quantity_units=40,
+                unit_price_eur="1.21",
+                line_total_eur="48.40",
+                available_units=100,
+            )
+        ],
+    )
+    gateway = FakeGateway(
+        place_order=order(status, options=[priced], total_eur="48.40"),
+        get_order=order(status, options=[priced], total_eur="48.40"),
+    )
+    async with db.pool.connection() as conn:
+        await conn.execute(
+            "INSERT INTO buyer.profiles (user_id, org_id, agent_id) VALUES (%s,%s,%s) ON CONFLICT (user_id) DO NOTHING",
+            (PROFILE.user_id, PROFILE.org_id, PROFILE.agent_id),
+        )
+    app = create_app(Settings(), store=db, gateway=gateway, llm=FakeLLM())
+    app.dependency_overrides[current_user] = lambda: Identity(str(PROFILE.user_id), "local-test-user-jwt")
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://api.test") as client:
+            response = await client.post("/api/requests", json={"text": "40 litres of milk"})
+            assert response.status_code == 202
+            request_id = response.json()["id"]
+            for _ in range(200):
+                response = await client.get(f"/api/requests/{request_id}")
+                assert response.status_code == 200
+                if response.json()["status"] != "running":
+                    break
+                await asyncio.sleep(0.01)
+            result = response.json()
+            assert result["status"] == status, result
+            assert result["options"][0]["total_eur"] == "48.40"
+            assert result["order"]["total_eur"] == "48.40"
+            events = (await client.get(f"/api/audit?request_id={request_id}")).json()
+            assert events[0]["event_type"] == "request.created"
+            assert events[-1]["decision"] == decision
+            assert events[-1]["trace_id"] == result["trace_id"]
+            assert "local-test-user-jwt" not in str(events)
+            assert len([call for call in gateway.calls if call[0] == "place_order"]) == 1

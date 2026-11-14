@@ -171,14 +171,23 @@ class MemoryStore:
                 return
         raise Conflict("Question is already answered or belongs to another request")
 
-    async def record_order(self, profile, request_id, result):
-        await self.update_request(
-            profile,
-            request_id,
-            order_id=UUID(result.order_id),
-            status=result.status,
-            options=result.options,
-        )
+    async def record_order(self, profile, request_id, result, *, audit=None):
+        before = self.requests[request_id].model_copy(deep=True)
+        try:
+            await self.update_request(
+                profile,
+                request_id,
+                order_id=UUID(result.order_id),
+                status=result.status,
+                options=result.options,
+                error=None,
+                step="waiting_for_approval" if result.status == "held" else "complete",
+            )
+            if audit:
+                await self.append_event(profile, request_id, **audit)
+        except Exception:
+            self.requests[request_id] = before
+            raise
 
     async def append_event(
         self,
@@ -272,4 +281,6 @@ class FakeGateway:
         value = self.responses[name]
         if isinstance(value, Exception):
             raise value
+        if callable(value):
+            value = value(arguments)
         return TypeAdapter(result_type).validate_python(value)

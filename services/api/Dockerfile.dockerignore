@@ -1,0 +1,18 @@
+# Dockerfile-specific ignore rules use the repository root as build context.
+# Keep local Windows runtimes and staged-check snapshots out of the Linux image.
+.git
+.env
+**/.env
+data/
+**/node_modules
+**/.next
+**/.venv
+**/.test-venv
+**/.python
+**/.phase-check
+**/__pycache__
+**/.pytest_cache
+**/.test-cache
+**/.ruff_cache
+**/.coverage
+**/htmlcov
