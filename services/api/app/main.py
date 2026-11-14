@@ -15,11 +15,14 @@ from .llm import OpenRouter
 from .pipeline import Pipeline, Tasks
 from .routes import router
 from .store import Conflict, PostgresStore
+from .telemetry import create_provider
 
 
-def create_app(settings: Settings | None = None, *, store=None, gateway=None, llm=None) -> FastAPI:
+def create_app(settings: Settings | None = None, *, store=None, gateway=None, llm=None, trace_provider=None) -> FastAPI:
     config = settings or Settings.from_env()
     verifier = SupabaseVerifier(config)
+    provider = trace_provider or create_provider()
+    tracer = provider.get_tracer("tta.api")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -30,8 +33,8 @@ def create_app(settings: Settings | None = None, *, store=None, gateway=None, ll
                 await owned_store.open()
                 app.state.store = owned_store
             app.state.gateway = gateway or Gateway(config)
-            app.state.llm = llm or OpenRouter(config, client)
-            app.state.pipeline = Pipeline(app.state.store, app.state.gateway, app.state.llm)
+            app.state.llm = llm or OpenRouter(config, client, tracer_instance=tracer)
+            app.state.pipeline = Pipeline(app.state.store, app.state.gateway, app.state.llm, tracer_instance=tracer)
             try:
                 yield
             finally:
@@ -39,6 +42,7 @@ def create_app(settings: Settings | None = None, *, store=None, gateway=None, ll
                 await verifier.close()
                 if owned_store:
                     await owned_store.close()
+                provider.shutdown()
 
     application = FastAPI(title="TTA buyer API", lifespan=lifespan)
     application.state.settings = config
@@ -46,6 +50,13 @@ def create_app(settings: Settings | None = None, *, store=None, gateway=None, ll
     application.state.store = store
     application.state.tasks = Tasks()
     application.include_router(router)
+
+    @application.middleware("http")
+    async def trace_request(request, call_next):
+        if not request.url.path.startswith("/api/") or request.url.path == "/api/health":
+            return await call_next(request)
+        with tracer.start_as_current_span("request.api", record_exception=False):
+            return await call_next(request)
 
     @application.exception_handler(Conflict)
     async def conflict_handler(request, exc):

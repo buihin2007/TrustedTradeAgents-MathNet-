@@ -8,17 +8,7 @@ from app.auth import Identity, current_user
 from app.config import Settings
 from app.main import create_app
 from app.models import Profile
-from tests.factories import AGENT_ID, ORG_ID, USER_ID, FakeGateway, FakeLLM, MemoryStore
-
-
-@pytest.fixture
-def api():
-    store = MemoryStore()
-    gateway = FakeGateway()
-    app = create_app(Settings(), store=store, gateway=gateway, llm=FakeLLM())
-    app.dependency_overrides[current_user] = lambda: Identity(str(USER_ID), "buyer-jwt")
-    with TestClient(app) as client:
-        yield client, app, store, gateway
+from tests.factories import AGENT_ID, ORG_ID
 
 
 def test_create_request_returns_202_and_pipeline_reaches_placed(api):

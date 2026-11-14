@@ -10,6 +10,7 @@ from psycopg_pool import AsyncConnectionPool
 from tta_contracts import ActorType, AuditDecision, AuditEvent, Order
 
 from .models import OptionPreview, Profile, Question, RequestDetail, RequestRecord
+from .telemetry import current_trace_id
 
 
 class Conflict(Exception):
@@ -116,8 +117,8 @@ class PostgresStore:
         async with self.pool.connection() as conn:
             await conn.execute(query, (*values, request_id, profile.user_id, profile.org_id))
 
-    async def save_options(self, profile: Profile, request_id: UUID, options: list):
-        async with self.pool.connection() as conn:
+    async def save_options(self, profile: Profile, request_id: UUID, options: list, *, connection=None):
+        async def write(conn):
             owned = await (
                 await conn.execute(
                     "SELECT id FROM buyer.requests WHERE id = %s AND user_id = %s AND org_id = %s FOR UPDATE",
@@ -140,6 +141,12 @@ class PostgresStore:
                         option.explanation,
                     ),
                 )
+
+        if connection is not None:
+            await write(connection)
+        else:
+            async with self.pool.connection() as conn:
+                await write(conn)
 
     async def ask(self, profile: Profile, request_id: UUID, question: str, choices: list[str]):
         async with self.pool.connection() as conn:
@@ -185,15 +192,20 @@ class PostgresStore:
             )
 
     async def record_order(self, profile: Profile, request_id: UUID, order: Order):
-        await self.save_options(profile, request_id, order.options)
-        await self.update_request(
-            profile,
-            request_id,
-            order_id=UUID(order.order_id),
-            status=order.status.value,
-            step="complete" if order.status != "held" else "waiting_for_approval",
-            error=None,
-        )
+        async with self.pool.connection() as conn:
+            await self.save_options(profile, request_id, order.options, connection=conn)
+            await conn.execute(
+                "UPDATE buyer.requests SET order_id=%s, status=%s, step=%s, error=NULL, updated_at=now() "
+                "WHERE id=%s AND user_id=%s AND org_id=%s",
+                (
+                    UUID(order.order_id),
+                    order.status.value,
+                    "complete" if order.status != "held" else "waiting_for_approval",
+                    request_id,
+                    profile.user_id,
+                    profile.org_id,
+                ),
+            )
 
     async def append_event(
         self,
@@ -218,7 +230,7 @@ class PostgresStore:
                 "user_id": str(profile.user_id),
                 "org_id": str(profile.org_id),
             },
-            trace_id=trace_id,
+            trace_id=trace_id or current_trace_id(),
         )
         async with self.pool.connection() as conn:
             # The schema has a single global chain. Serialize head-read + insertion

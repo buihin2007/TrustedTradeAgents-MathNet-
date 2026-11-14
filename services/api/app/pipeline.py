@@ -26,13 +26,14 @@ tracer = trace.get_tracer("tta.api")
 
 
 class Pipeline:
-    def __init__(self, store, gateway, llm):
+    def __init__(self, store, gateway, llm, tracer_instance=None):
         self.store = store
         self.gateway = gateway
         self.llm = llm
+        self.tracer = tracer_instance or tracer
 
     async def run(self, request_id, profile, user):
-        with tracer.start_as_current_span("request.pipeline", record_exception=False) as span:
+        with self.tracer.start_as_current_span("request.pipeline", record_exception=False) as span:
             span.set_attribute("langfuse.session.id", str(request_id))
             span.set_attribute("langfuse.user.id", str(profile.user_id))
             context = span.get_span_context()
@@ -66,7 +67,7 @@ class Pipeline:
                     await step("parsing")
                     # Facets must precede register_intent: its contract already needs
                     # canonical Criteria. This resolves the plan's ordering ambiguity.
-                    with tracer.start_as_current_span("request.facets", record_exception=False):
+                    with self.tracer.start_as_current_span("request.facets", record_exception=False):
                         facets = await gateway.call("get_facets", {}, Facets)
                     answers = [
                         {"question": q.question, "answer": q.answer} for q in request.questions if q.answer is not None
@@ -92,7 +93,7 @@ class Pipeline:
                         quantity_unit=parsed.quantity_unit,
                         delivery_date=parsed.delivery_date,
                     )
-                    with tracer.start_as_current_span("request.intent", record_exception=False):
+                    with self.tracer.start_as_current_span("request.intent", record_exception=False):
                         intent = await gateway.call(
                             "register_intent",
                             registration.model_dump(mode="json"),
@@ -104,7 +105,7 @@ class Pipeline:
                     await self.store.update_request(profile, request_id, intent_id=UUID(intent.intent_id))
                     await event("intent.registered", "Buyer intent registered")
                     await step("searching")
-                    with tracer.start_as_current_span("request.search", record_exception=False):
+                    with self.tracer.start_as_current_span("request.search", record_exception=False):
                         search = await gateway.call(
                             "search_products",
                             SearchProductsRequest(
@@ -133,7 +134,7 @@ class Pipeline:
                         )
                         return
                     await step("pricing")
-                    with tracer.start_as_current_span("request.pricing", record_exception=False):
+                    with self.tracer.start_as_current_span("request.pricing", record_exception=False):
                         quote = await gateway.call(
                             "get_price_availability",
                             PriceAvailabilityRequest(
@@ -147,7 +148,7 @@ class Pipeline:
                         raise GatewayUnavailable("Gateway quote has a different delivery date")
                     await event("price.checked", f"Checked {len(quote.offers)} product offers")
                     await step("building_options")
-                    with tracer.start_as_current_span("request.options", record_exception=False):
+                    with self.tracer.start_as_current_span("request.options", record_exception=False):
                         options = build_options(parsed, search.hits[:50], quote.offers)
                     if not options:
                         await ask(
@@ -176,7 +177,7 @@ class Pipeline:
                         preferred_index=0,
                         idempotency_key=f"{request_id}:{intent.intent_id}",
                     )
-                    with tracer.start_as_current_span("request.submit", record_exception=False):
+                    with self.tracer.start_as_current_span("request.submit", record_exception=False):
                         order = await gateway.call("place_order", proposal.model_dump(mode="json"), Order)
                     if order.intent_id != intent.intent_id:
                         raise GatewayUnavailable("Gateway order does not belong to the registered intent")

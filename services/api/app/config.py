@@ -2,6 +2,8 @@
 
 import os
 from dataclasses import dataclass, field
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 
 @dataclass(frozen=True)
@@ -13,6 +15,10 @@ class Settings:
     agent_key: str = field(default="", repr=False)
     openrouter_api_key: str = field(default="", repr=False)
     llm_model: str = ""
+    buyer_timezone: str = "Europe/Kyiv"
+
+    def today(self):
+        return datetime.now(ZoneInfo(self.buyer_timezone)).date()
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -24,4 +30,5 @@ class Settings:
             agent_key=os.getenv("AGENT_KEY", ""),
             openrouter_api_key=os.getenv("OPENROUTER_API_KEY", ""),
             llm_model=os.getenv("LLM_MODEL", ""),
+            buyer_timezone=os.getenv("BUYER_TIMEZONE") or "Europe/Kyiv",
         )

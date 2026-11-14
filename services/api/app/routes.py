@@ -25,6 +25,7 @@ from .models import (
     RequestDetail,
     RequestRecord,
 )
+from .telemetry import current_trace_id
 
 router = APIRouter(prefix="/api")
 
@@ -158,6 +159,8 @@ async def decide_order(
     store: Store,
 ):
     item = await owned_order(store, profile, order_id)
+    if item.status != "held":
+        raise HTTPException(409, "Order is no longer waiting for approval")
     async with request.app.state.gateway.session(user) as gateway:
         existing = await gateway.call("get_order", {"order_id": str(order_id)}, Order, actor="user")
         if existing.order_id != str(order_id) or existing.intent_id != str(item.intent_id):
@@ -176,22 +179,22 @@ async def decide_order(
     if order.order_id != str(order_id) or order.intent_id != str(item.intent_id):
         raise HTTPException(502, "Gateway returned an unrelated order")
     await store.record_order(profile, item.id, order)
-    kind = "user.approved" if body.action == "approve" else "user.rejected"
-    decision = AuditDecision.APPROVED if body.action == "approve" else AuditDecision.REJECTED
-    # A gateway may hold the order again after rechecking price/stock.
-    if order.status == "held":
-        kind, decision = "gate.held", AuditDecision.APPROVAL_REQUIRED
-    elif order.status == "blocked":
-        kind, decision = "order.blocked", AuditDecision.BLOCKED
+    # The returned state is authoritative, including a new hold after repricing.
+    kind, decision = {
+        "placed": ("user.approved", AuditDecision.APPROVED),
+        "rejected": ("user.rejected", AuditDecision.REJECTED),
+        "held": ("gate.held", AuditDecision.APPROVAL_REQUIRED),
+        "blocked": ("order.blocked", AuditDecision.BLOCKED),
+    }[order.status]
     await store.append_event(
         profile,
         item.id,
         kind,
         f"Gateway returned {order.status} after buyer decision",
-        actor=ActorType.USER,
+        actor=ActorType.GATEWAY if order.status in {"held", "blocked"} else ActorType.USER,
         decision=decision,
-        trace_id=item.trace_id,
-        details={"order_id": str(order_id), "reasons": [r.value for r in order.reasons]},
+        trace_id=order.trace_id or current_trace_id(),
+        details={"order_id": str(order_id), "action": body.action, "reasons": [r.value for r in order.reasons]},
     )
     return order
 
@@ -199,7 +202,10 @@ async def decide_order(
 @router.get("/mandate", response_model=Mandate)
 async def mandate(request: Request, user: User, profile: Buyer):
     async with request.app.state.gateway.session(user) as gateway:
-        return await gateway.call("get_mandate", {"agent_id": str(profile.agent_id)}, Mandate, actor="user")
+        result = await gateway.call("get_mandate", {"agent_id": str(profile.agent_id)}, Mandate, actor="user")
+    if result.org_id != str(profile.org_id) or result.agent_id != str(profile.agent_id):
+        raise HTTPException(502, "Gateway returned an unrelated mandate")
+    return result
 
 
 @router.put("/mandate", response_model=Mandate)
@@ -220,6 +226,8 @@ async def update_mandate(body: MandateLimits, request: Request, user: User, prof
             Mandate,
             actor="user",
         )
+    if result.org_id != str(profile.org_id) or result.agent_id != str(profile.agent_id):
+        raise HTTPException(502, "Gateway returned an unrelated mandate")
     await store.append_event(
         profile,
         None,

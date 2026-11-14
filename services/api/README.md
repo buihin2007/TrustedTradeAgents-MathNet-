@@ -11,7 +11,7 @@ From `services/api`, with Python and uv installed:
 uv sync --locked
 uv run pytest -q
 uv run ruff check app tests
-uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
+uv run python -m app
 ```
 
 Tests use locally generated signing keys and a mock JWKS endpoint. No Supabase
@@ -78,3 +78,58 @@ Validation: `uv run pytest -q` exercises real Supabase verification with local
 JWKS, a real in-process FastMCP client/server round trip, mocked OpenRouter,
 quantity/lot/ranking rules, pipeline outcomes and REST ownership checks. External
 credentials are not used. Docker/Postgres/live-gateway validation is separate.
+
+## Phase 2: questions, approvals, audit and traces
+
+- `POST /api/requests/{id}/answer` accepts
+  `{"question_id":"<uuid>","answer":"40 litres"}`. Only an unanswered question
+  on an owned `asking` request can advance the pipeline. PostgreSQL row locking
+  prevents two submissions from starting two continuations. A continuation
+  reparses the original text plus all recorded Q&A and registers a fresh intent.
+  It does not silently change the original hard constraints.
+- `GET /api/approvals` lists held orders referenced by the current user's buyer
+  requests and refreshes them through `get_order`. It cannot list orders created
+  independently by another client: there is no shared list-orders tool yet.
+- `POST /api/approvals/{order_id}` accepts
+  `{"action":"approve","option_index":0}` or
+  `{"action":"reject","note":"..."}`. Both use the user's JWT. Repricing can
+  return `held` again, which must be displayed for a new review.
+- `GET/PUT /api/mandate` use `Mandate`/`MandateLimits`; `POST /api/agent/pause`
+  and `/resume` derive the agent ID from the authenticated profile.
+- `GET /api/audit?request_id=<uuid>&decision=blocked&limit=50&offset=0` is scoped
+  to this buyer. SQL writes serialize the global hash-chain head with an advisory
+  transaction lock. The database's append-only trigger comes from P1's migration.
+  A filtered/paginated audit response is not the full global chain and cannot be
+  passed directly to `verify_chain` as if it started at the chain's first event.
+
+Tracing generates request/pipeline/step spans and propagates W3C `traceparent`
+into MCP metadata. LLM spans contain model/token counts. No keys, JWTs or full
+prompts are added as span attributes. Set `OTEL_EXPORTER_OTLP_ENDPOINT` and
+`OTEL_EXPORTER_OTLP_HEADERS` to export to Langfuse over HTTP; without both,
+trace IDs still exist locally and nothing is sent. Coordinate deployment/exporter
+settings with P4. `BUYER_TIMEZONE` defaults to `Europe/Kyiv` for relative-date
+parsing; ambiguous dates remain a question for the buyer.
+
+Local Windows startup uses `python -m app` to select the event loop required by
+psycopg. Docker runs Linux and keeps the existing uvicorn entrypoint.
+
+### Real PostgreSQL tests
+
+With Docker's Linux engine running, start a disposable local database:
+
+```powershell
+docker run -d --name tta-api-test-db -e POSTGRES_USER=tta_test -e POSTGRES_PASSWORD=tta_test -e POSTGRES_DB=tta_api_test_local -p 127.0.0.1:55432:5432 postgres:17
+$env:TEST_DATABASE_URL='postgresql://tta_test:tta_test@127.0.0.1:55432/tta_api_test_local'
+uv run pytest -q
+```
+
+The database tests create a uniquely named local test database, apply the buyer
+section of P1's actual migration, and drop only that created database at teardown.
+They check concurrent audit appends, the append-only trigger, concurrent answers,
+ownership filtering, real JSON/model round trips and transactional rollback.
+Without `TEST_DATABASE_URL`, these five tests are explicitly skipped. The tests
+reject non-local hosts and database names outside `tta_api_test_*`.
+
+Phase 2 checkpoint: 92 tests passed on Python 3.12; five real-Postgres tests were
+not run because Docker's engine returned HTTP 500. This is not a live integration
+pass. Unit tests do not prove the P2 gateway or team Supabase setup is ready.
