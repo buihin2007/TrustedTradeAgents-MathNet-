@@ -9,13 +9,18 @@ from tta_contracts import Offer, OrderLineIn, OrderOption, ProductHit
 from .models import OptionPreview, ParsedRequest
 
 
-def units_needed(quantity: Decimal, size: Decimal, lot: int | None) -> int:
+def step_of(lot: float | None) -> Decimal:
+    # allowed_lot_size is a float in the catalog (0.01 for most KG/L items); do the math in Decimal.
+    return Decimal(str(lot)) if lot else Decimal(1)
+
+
+def units_needed(quantity: Decimal, size: Decimal, lot: float | None) -> Decimal:
     if not quantity.is_finite() or not size.is_finite() or quantity <= 0 or size <= 0:
         raise ValueError("Quantity and sales-unit size must be positive and finite")
     if lot is not None and lot <= 0:
         raise ValueError("Invalid lot size")
-    step = lot or 1
-    return int((quantity / size / step).to_integral_value(rounding=ROUND_CEILING)) * step
+    step = step_of(lot)
+    return (quantity / size / step).to_integral_value(rounding=ROUND_CEILING) * step
 
 
 def unit_size(product: ProductHit, unit: str) -> Decimal | None:
@@ -31,7 +36,7 @@ class Candidate:
     product: ProductHit
     offer: Offer
     size: Decimal
-    units: int
+    units: Decimal
     enough: bool
 
     @property
@@ -134,7 +139,7 @@ def build_options(
         ):
             add(
                 label,
-                [OrderLineIn(product_id=item.product.product_id, quantity_units=item.units)],
+                [OrderLineIn(product_id=item.product.product_id, quantity_units=float(item.units))],
                 item.total,
                 item.size * item.units,
             )
@@ -147,12 +152,12 @@ def build_options(
     total = Decimal("0")
     supplied = Decimal("0")
     for item in sorted(items, key=lambda c: (c.offer.unit_price_eur / c.size, c.product.product_id)):
-        lot = item.product.allowed_lot_size or 1
-        capacity = int((Decimal(str(item.offer.available_on_date)) / lot).to_integral_value(rounding=ROUND_FLOOR)) * lot
+        lot = step_of(item.product.allowed_lot_size)
+        capacity = (Decimal(str(item.offer.available_on_date)) / lot).to_integral_value(rounding=ROUND_FLOOR) * lot
         units = min(capacity, units_needed(remaining, item.size, lot))
         if units <= 0:
             continue
-        lines.append(OrderLineIn(product_id=item.product.product_id, quantity_units=units))
+        lines.append(OrderLineIn(product_id=item.product.product_id, quantity_units=float(units)))
         total += item.offer.unit_price_eur * units
         supplied += item.size * units
         remaining -= item.size * units

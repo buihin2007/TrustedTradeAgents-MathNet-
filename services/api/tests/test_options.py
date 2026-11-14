@@ -17,6 +17,8 @@ from tests.factories import DELIVERY, hit, offer
         (0.3, 0.1, 1, 3),
         (1, 0.5, None, 2),
         (3, 1, 5, 5),
+        (2.5, 1, 0.01, Decimal("2.5")),     # real catalog: lot 0.01 on KG/L items
+        (2.503, 1, 0.01, Decimal("2.51")),
     ],
 )
 def test_quantity_rounds_up_to_sales_units_and_lots(quantity, size, lot, expected):

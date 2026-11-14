@@ -78,12 +78,14 @@ def evaluate_option(
     total = Decimal(0)
     for line in option.lines:
         quantities[line.product_id] += line.quantity_units
+        # quantity_units and allowed_lot_size are floats (lot 0.01); compare as decimals, 2.0 % 0.01 != 0 in float
+        quantity = Decimal(str(line.quantity_units))
         product = products.get(line.product_id)
         if product is None or not in_scope(product, intent, mandate):
             reasons.add(Reason.MUST_VIOLATED)
         if product and (
-            line.quantity_units > 2_147_483_647
-            or line.quantity_units % (product.allowed_lot_size or 1)
+            quantity > 2_147_483_647
+            or quantity % Decimal(str(product.allowed_lot_size or 1))
         ):
             reasons.add(Reason.LOT_SIZE)
         if line.substitute_for is not None:
@@ -101,7 +103,7 @@ def evaluate_option(
         if not offer or offer.unit_price_eur is None or offer.error:
             reasons.add(Reason.PARTIAL_AVAILABILITY)
             continue
-        amount = offer.unit_price_eur * line.quantity_units
+        amount = (offer.unit_price_eur * quantity).quantize(Decimal("0.01"))
         prior = reference_prices.get(line.product_id)
         if (
             prior is None
