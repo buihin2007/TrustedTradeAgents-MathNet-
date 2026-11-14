@@ -1,4 +1,5 @@
 .pytest_cache/
+.test-cache/
 .ruff_cache/
 .coverage
 htmlcov/

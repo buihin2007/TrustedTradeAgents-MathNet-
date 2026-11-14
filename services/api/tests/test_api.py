@@ -1,0 +1,80 @@
+import time
+from uuid import uuid4
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.auth import Identity, current_user
+from app.config import Settings
+from app.main import create_app
+from app.models import Profile
+from tests.factories import AGENT_ID, ORG_ID, USER_ID, FakeGateway, FakeLLM, MemoryStore
+
+
+@pytest.fixture
+def api():
+    store = MemoryStore()
+    gateway = FakeGateway()
+    app = create_app(Settings(), store=store, gateway=gateway, llm=FakeLLM())
+    app.dependency_overrides[current_user] = lambda: Identity(str(USER_ID), "buyer-jwt")
+    with TestClient(app) as client:
+        yield client, app, store, gateway
+
+
+def test_create_request_returns_202_and_pipeline_reaches_placed(api):
+    client, _, store, _ = api
+    response = client.post("/api/requests", json={"text": "40 litres of milk"})
+    assert response.status_code == 202
+    request_id = response.json()["id"]
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        detail = client.get(f"/api/requests/{request_id}")
+        if detail.json()["status"] != "running":
+            break
+        time.sleep(0.01)
+    assert detail.status_code == 200
+    assert detail.json()["status"] == "placed"
+    assert detail.json()["order"]["status"] == "placed"
+    assert store.events[0].event_type == "request.created"
+    assert "buyer-jwt" not in detail.text
+
+
+def test_unknown_user_profile_is_forbidden(api):
+    client, app, _, gateway = api
+    app.dependency_overrides[current_user] = lambda: Identity(str(uuid4()), "other-token")
+    assert client.post("/api/requests", json={"text": "milk"}).status_code == 403
+    assert gateway.calls == []
+
+
+def test_other_user_cannot_read_request_even_in_same_org(api):
+    client, app, store, gateway = api
+    request_id = client.post("/api/requests", json={"text": "milk"}).json()["id"]
+    other_id = uuid4()
+    store.profiles[str(other_id)] = Profile(user_id=other_id, org_id=ORG_ID, agent_id=AGENT_ID)
+    app.dependency_overrides[current_user] = lambda: Identity(str(other_id), "other-token")
+    before = len(gateway.calls)
+    assert client.get(f"/api/requests/{request_id}").status_code == 404
+    assert client.get("/api/requests").json() == []
+    assert len(gateway.calls) == before
+
+
+@pytest.mark.parametrize("text", ["", "   ", "x" * 1001])
+def test_invalid_request_is_not_started(api, text):
+    client, _, store, gateway = api
+    assert client.post("/api/requests", json={"text": text}).status_code == 422
+    assert store.requests == {}
+    assert gateway.calls == []
+
+
+def test_business_routes_require_authentication_and_schema_is_available():
+    app = create_app(Settings())
+    with TestClient(app) as client:
+        schema = client.get("/openapi.json").json()
+        for route, methods in schema["paths"].items():
+            if route.startswith("/api/") and route != "/api/health":
+                path = route.replace("{request_id}", str(uuid4())).replace("{order_id}", str(uuid4()))
+                for method in methods:
+                    response = client.request(method, path, json={})
+                    assert response.status_code == 401, (method, path, response.text)
+        assert "/api/requests" in schema["paths"]
+        assert schema["components"]["schemas"]["CreateRequest"]["additionalProperties"] is False
