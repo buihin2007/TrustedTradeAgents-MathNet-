@@ -1,5 +1,6 @@
 """Facets, structured filters, guarded hybrid search and zero-hit diagnostics."""
 
+import os
 import re
 from collections import defaultdict
 from math import isfinite
@@ -143,7 +144,9 @@ class Catalog:
         shape = criteria.shape()
         if shape in self.sql_cache:
             return self.sql_cache[shape], "cache"
-        if not self.router.llm_model or not self.router.key:
+        # checked_sql() only accepts SQL identical to the template and then runs the template, so the
+        # LLM round trips (up to 2 per new shape) add seconds without changing the query. Opt in only.
+        if os.getenv("SEARCH_LLM_SQL") != "1" or not self.router.llm_model or not self.router.key:
             return template, "template"
         schema = await self._schema_card(conn)
         prompt = (

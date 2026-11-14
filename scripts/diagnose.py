@@ -86,13 +86,17 @@ def check_db(email: str) -> None:
         for e in rows("""select event_type, decision, summary, details from buyer.audit_events
                          where request_id = %s order by seq""", req["id"]):
             print(f"{INFO}  {e['event_type']:<22} {e['decision']:<18} {e['summary']}  {e['details'] or ''}")
-        events = rows("""select ts, tool, actor_kind, actor_id, decision, reasons from wholesaler.gateway_events
+        events = rows("""select ts, tool, actor_kind, actor_id, decision, reasons, latency_ms from wholesaler.gateway_events
                          where ts >= %s - interval '30 seconds' order by ts limit 30""", req["created_at"])
         print(f"{INFO}gateway_events từ lúc tạo request ({len(events)}):")
         for e in events:
             who = "CHƯA XÁC THỰC" if e["actor_id"] == "unauthenticated" else e["actor_kind"]
-            print(f"{INFO}  {e['ts']:%H:%M:%S} {e['tool']:<24} {who:<14} {e['decision']:<9} {','.join(e['reasons'])}")
+            print(f"{INFO}  {e['ts']:%H:%M:%S} {e['tool']:<24} {who:<14} {e['decision']:<9} {e['latency_ms']:>6} ms  {','.join(e['reasons'])}")
 
+        slow = [e for e in events if e["tool"] == "search_products" and e["decision"] == "block" and e["latency_ms"] >= 1900]
+        if slow:
+            hints.append("search_products bị chặn sau ~2 s: truy vấn vector quá chậm. Chạy migration "
+                         "supabase/migrations/0004_vector_index.sql trong Supabase SQL Editor.")
         denied = [e for e in events if "FORBIDDEN" in e["reasons"]]
         if not events:
             hints.append("Không có gateway_events nào: request không tới được gateway. FORBIDDEN đến từ API "
