@@ -1,6 +1,6 @@
 # Trusted Trade Agents (Junction 2026, Valio Aimo track)
 
-Read this file before writing any code. The full plan: https://claude.ai/artifact/BUTtVyQLjNt5hKhqRmXBZg
+Read this file before writing any code. Full plan: `docs/PLAN.md` (live version: https://claude.ai/artifact/BUTtVyQLjNt5hKhqRmXBZg).
 
 ## What we build
 
