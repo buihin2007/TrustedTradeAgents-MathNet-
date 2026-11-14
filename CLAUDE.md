@@ -41,7 +41,9 @@ Only edit your own folders. Need a change elsewhere: ask its owner.
 - Ports: web 3000, api 8000, mcp 9000. Only nginx is published (8080).
 - `api` exposes public routes under `/api/...`. `mcp` serves MCP at `/mcp` (no trailing slash).
 - `api` calls the gateway at `MCP_URL=http://nginx/mcp`, never `mcp:9000`, so rate limits apply.
-- Database: `supabase/migrations/0001_init.sql`, `0002_audit_dashboard.sql`, demo data `supabase/seed.sql`, fake gateway traffic `scripts/demo/fake_gateway_events.sql`. Embeddings are `vector(1536)` = `EMBED_MODEL=openai/text-embedding-3-small`.
+- Database: migrations `0001_init.sql`, `0002_audit_dashboard.sql`, `0003_import_fixes.sql` (run in order), demo data `supabase/seed.sql`, fake gateway traffic `scripts/demo/fake_gateway_events.sql`.
+- Models: embeddings `baai/bge-m3` = `vector(1024)` (same model at import and at query time); LLM `deepseek/deepseek-v4.1-flash` with fallback `anthropic/claude-haiku-5.5`. Call OpenRouter with `"models": [LLM_MODEL, LLM_MODEL_FALLBACK]`, `response_format` json_schema strict, `"provider": {"sort": "price", "require_parameters": true}`, then validate with Pydantic.
+- Tracing: call `tta_contracts.telemetry.langfuse_otel_env()` at startup; it builds the OTLP settings from `LANGFUSE_*`. Export with OpenTelemetry, not the Langfuse SDK (the SDK drops non-LLM spans by default).
 - Grafana (Valio Aimo audit dashboard) runs on http://localhost:3001, outside nginx. It reads only the `wholesaler.v_audit_*` views as role `dashboard_ro` (migration 0002). Never point it at base tables.
 - Every gate decision, including Gate-level rate limits (`RATE_LIMIT`), must write one row to `wholesaler.gateway_events`, or the dashboard cannot show it. Requests rejected with 429 by nginx never reach the gate.
 - Connections: Supabase session pooler allows 15 clients per role by default, shared by the whole team. Keep each service's DB pool at 2 connections max.
@@ -75,10 +77,19 @@ uv add --editable ../../packages/contracts
 
 ```bash
 docker compose up --build              # buyer app on http://localhost:8080, audit dashboard on http://localhost:3001
-docker compose run --rm import         # one-off data import
+python scripts/import/run.py            # one-off data import (from repo root, needs .env); --limit 200 to test
 uv run pytest                          # inside services/api or services/mcp
 npx @modelcontextprotocol/inspector    # point at http://localhost:8080/mcp with the agent key
 ```
+
+## Data facts (checked against the real files)
+
+- Product ids are strings in the source and in the Valio API (`"460013"`). Store and pass them as `int` internally; send `[str(p) for p in ids]` to `/api/price` and `/api/availability`, read `int(productId)` back.
+- Valio API body: `{"customer": VALIO_CUSTOMER, "products": [...], "requestedDate": "YYYY-MM-DD"}`, header `X-API-Key`.
+- `allowedLotSize` is fractional (0.01 for 16,872 of 17,546 products), so order quantities are floats.
+- Allergens: `allergens_contains` holds codes declared CONTAINS or MAY_CONTAIN (GS1 codes, AM = milk, AW = gluten cereals, AE = eggs).
+- Jev answers look like `{"type": "noul", "noul": 0.93}`: read `answers[q]["noul"]`.
+- Unit sizes are computed per sales unit; about 18 source records had grams stored as kg (fixed at import against the product name).
 
 ## Read the docs before using a library (do not guess APIs)
 

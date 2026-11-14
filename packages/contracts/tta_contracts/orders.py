@@ -45,7 +45,7 @@ OptionLabel = Literal["best_match", "cheapest", "most_reliable", "split_or_subst
 class OrderLineIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     product_id: int
-    quantity_units: int = Field(gt=0)        # number of sales units
+    quantity_units: float = Field(gt=0)      # number of sales units; may be fractional (lot size 0.01, e.g. 2.5 KG)
     substitute_for: int | None = None        # original product_id if this line is a substitute
 
 
@@ -76,7 +76,7 @@ class PlaceOrderRequest(BaseModel):
 class PricedLine(BaseModel):
     product_id: int
     name_en: str | None
-    quantity_units: int
+    quantity_units: float
     unit_price_eur: Decimal
     line_total_eur: Decimal
     available_units: float | None

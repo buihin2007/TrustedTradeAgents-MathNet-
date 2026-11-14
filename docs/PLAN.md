@@ -25,6 +25,7 @@ Mười một lựa chọn đầu đến từ buổi grill; năm dòng cuối l�
 | Intent | Yêu cầu gốc được đăng ký tại cổng kèm JWT người dùng; agent chỉ tham chiếu `intent_id` | Mặc định |
 | Mandate | Seed sẵn 1 bản; người dùng sửa được hạn mức trên UI | Mặc định |
 | Trace | OpenTelemetry gửi về Langfuse, kèm bảng `gateway_events` trong Postgres | Mặc định |
+| Model | Embeddings `baai/bge-m3` (1024 chiều, đa ngôn ngữ en/fi/sv); LLM `deepseek/deepseek-v4.1-flash`, dự phòng `anthropic/claude-haiku-5.5` | Sau grill |
 | Agent thứ hai khi demo | MCP Inspector và một script agent "hư" | Mặc định |
 
 ## Kiến trúc
@@ -178,13 +179,17 @@ grant search_ro to postgres;
 
 ### Script import, chạy một lần
 
-1. Đọc file JSON sản phẩm theo luồng bằng `ijson`.
-2. Làm phẳng: tên theo 3 ngôn ngữ, brand, GTIN, claims, allergens, labels, thành phần.
-3. Tính `unit_volume_l` và `unit_weight_kg` cho đơn vị bán từ `unitConversions`. Thiếu thì bắt số trong tên, ví dụ "1 l" hoặc "500 g", và gắn cờ `size_derived`.
+`scripts/import/run.py`, chạy từ gốc repo sau migration 0001 đến 0003: `python scripts/import/run.py`. Thêm `--limit 200` để thử nhanh.
+
+1. Đọc file JSON sản phẩm (87 MB, 17.546 sản phẩm) và hai file CSV trong `data/`.
+2. Làm phẳng: tên theo 3 ngôn ngữ, brand, GTIN, claims, dị ứng (cả `CONTAINS` và `MAY_CONTAIN`), nhãn bao bì, thành phần.
+3. Tính `unit_volume_l` và `unit_weight_kg` cho một đơn vị bán: cỡ đơn vị gốc từ `unitConversions`, nhân `sizeInBaseUnits` của đơn vị bán. Thiếu thì bắt số trong tên ("1 l", "400 g") và gắn cờ `size_derived`. Khoảng 18 bản ghi lưu gram dưới đơn vị kg, script đối chiếu với tên để sửa.
 4. Gộp hai file CSV: độ tin cậy giao hàng (4.425 dòng) và CO2 (11.033 dòng). Thiếu thì để NULL, không điền số giả.
-5. Sinh tên cho 349 mã category bằng LLM, mỗi mã đưa 20 tên sản phẩm mẫu. Ghi `derived = true`.
-6. Tạo `search_text`, gọi embeddings theo lô 100 dòng, ghi vào `embedding`.
-7. Tạo index GIN cho `fts` và cho `claims`. Không tạo index vector, lý do nằm ở phần search.
+5. Đặt tên cho 349 mã category bằng LLM, mỗi mã đưa 15 tên sản phẩm mẫu, 25 mã mỗi lần gọi. Ghi `derived = true`.
+6. Tạo `search_text` (tên en, fi, sv, brand, tên category), gọi embeddings `bge-m3` theo lô 100, 4 luồng song song.
+7. Ghi vào Supabase bằng upsert, chạy lại an toàn. Tên category và embeddings được cache trong `data/.cache/` (khoảng 96 MB), nên chạy lại không tốn tiền.
+
+Kết quả thử trên Postgres cục bộ: 17.546 sản phẩm, 250 cặp thay thế, khoảng 90 nhãn mã. Cỡ database khoảng 50 MB chưa tính embeddings, cộng khoảng 72 MB embeddings, dưới giới hạn 500 MB của gói Free. Không lưu nguyên bản JSON vào cột `raw` để giữ dung lượng.
 
 Seed đi kèm: 1 tổ chức, 1 người dùng demo, 1 agent, 1 mandate.
 
@@ -593,9 +598,10 @@ Phía bên mua, `api` tạo span gốc `request.pipeline` cho mỗi yêu cầu, 
 Cấu hình chung cho `api` và `mcp`:
 
 ```text
-OTEL_EXPORTER_OTLP_ENDPOINT=https://cloud.langfuse.com/api/public/otel
-OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(public_key:secret_key)>,x-langfuse-ingestion-version=4
-OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+# tta_contracts.telemetry.langfuse_otel_env() dựng OTEL_EXPORTER_OTLP_* từ 3 biến này lúc khởi động
 ```
 
 - Langfuse không nhận gRPC, chỉ nhận OTLP qua HTTP.
@@ -704,11 +710,11 @@ Lưu ý khi viết Dockerfile:
 | `SUPABASE_URL` | `api`, `mcp` | Để lấy JWKS |
 | `DATABASE_URL` | `api`, `mcp`, `import` | Chuỗi Session pooler |
 | `OPENROUTER_API_KEY` | `api`, `mcp`, `import` |  |
-| `LLM_MODEL`, `EMBED_MODEL`, `JEV_MODEL` | `api`, `mcp`, `import` | Đổi model không cần sửa code |
+| `LLM_MODEL`, `LLM_MODEL_SQL`, `LLM_MODEL_FALLBACK`, `EMBED_MODEL`, `JEV_MODEL` | `api`, `mcp`, `import` | Đổi model không cần sửa code |
 | `VALIO_API_BASE`, `VALIO_API_KEY`, `VALIO_CUSTOMER` | `mcp` | Key lấy từ tài liệu đề |
 | `AGENT_KEY` | `api` | Hash của nó nằm trong `wholesaler.agents` |
 | `MCP_URL` | `api` | `http://nginx/mcp` |
-| `OTEL_EXPORTER_OTLP_*` | `api`, `mcp` | Xem phần trace |
+| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` | `api`, `mcp` | `tta_contracts.telemetry` tự dựng cấu hình OTLP |
 | `SUPABASE_PROJECT_REF`, `GRAFANA_DB_HOST`, `GRAFANA_DB_PASSWORD`, `GRAFANA_ADMIN_PASSWORD` | `grafana` | Host là phần host của chuỗi Session pooler |
 
 Chạy lần đầu: `docker compose up --build`, sau đó `docker compose run --rm import`. App người mua ở `http://localhost:8080`, dashboard Valio Aimo ở `http://localhost:3001`.
