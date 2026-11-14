@@ -1,0 +1,47 @@
+# Whole stack on http://localhost:8080. Owner: P4.
+# Every service: Dockerfile at its folder root, GET /health returns 200.
+
+x-py-health: &py-health
+  interval: 5s
+  timeout: 3s
+  retries: 20
+
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    ports: ["8080:80"]
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      api: { condition: service_healthy }
+      mcp: { condition: service_healthy }
+
+  api:
+    build: { context: ., dockerfile: services/api/Dockerfile }
+    env_file: .env
+    environment:
+      OTEL_SERVICE_NAME: tta-api
+    healthcheck:
+      <<: *py-health
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+
+  mcp:
+    build: { context: ., dockerfile: services/mcp/Dockerfile }
+    env_file: .env
+    environment:
+      OTEL_SERVICE_NAME: tta-mcp
+    healthcheck:
+      <<: *py-health
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/health')"]
+
+  web:
+    build: { context: ., dockerfile: apps/web/Dockerfile }
+    env_file: .env
+    profiles: ["web"]   # remove this line once apps/web has a Dockerfile
+
+  import:
+    build: { context: ., dockerfile: services/mcp/Dockerfile }
+    env_file: .env
+    volumes: ["./data:/repo/data:ro", "./scripts:/repo/scripts:ro"]
+    command: ["python", "/repo/scripts/import/run.py"]
+    profiles: ["tools"]  # docker compose run --rm import

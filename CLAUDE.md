@@ -33,6 +33,16 @@ Only edit your own folders. Need a change elsewhere: ask its owner.
 4. Jev can only make a decision stricter. Numeric limits are checked in code.
 5. Generated SQL: one SELECT on `wholesaler.v_product_search` + `wholesaler.hybrid_rank`, named bind params only, LIMIT required, role `search_ro`, read-only transaction, 2 s timeout, rows re-checked against `must`.
 
+## Service rules
+
+- Every service has a `Dockerfile` at its folder root, built with the repo root as context.
+- Every service answers `GET /health` with 200. Compose and nginx depend on it.
+- Ports: web 3000, api 8000, mcp 9000. Only nginx is published (8080).
+- `api` exposes public routes under `/api/...`. `mcp` serves MCP at `/mcp` (no trailing slash).
+- `api` calls the gateway at `MCP_URL=http://nginx/mcp`, never `mcp:9000`, so rate limits apply.
+- Database: `supabase/migrations/0001_init.sql`, demo data `supabase/seed.sql`. Embeddings are `vector(1536)` = `EMBED_MODEL=openai/text-embedding-3-small`.
+- Generated SQL runs as: `BEGIN READ ONLY; SET LOCAL ROLE search_ro; SET LOCAL statement_timeout = '2s'; ...`.
+
 ## Contracts
 
 `packages/contracts` is the single source of truth for every request and response between `api` and `mcp`.
@@ -50,7 +60,7 @@ uv add --editable ../../packages/contracts
 
 ## Git
 
-- One branch per person: `p1p4-data-web`, `p2-gate`, `p3-api`.
+- One branch per person: `db-hin` (P1 + P4), `mcp-hoang` (P2), `api-chu` (P3).
 - Merge to `main` via PR at each milestone: M0 0:45, M1 4:00, M2 8:00, M3 11:00.
 - Between milestones: `git pull origin main` into your branch.
 - `main` must always start with `docker compose up --build`.
