@@ -24,7 +24,7 @@ class Range(_Strict):
 class Must(_Strict):
     """Hard constraints. The gateway never relaxes them; every returned row satisfies all of them."""
     claims_all: list[str] = []              # e.g. ["FREE_FROM_LACTOSE"], codes from get_facets
-    allergens_none: list[str] = []          # allergen codes the product must NOT contain
+    allergens_none: list[str] = []          # allergen codes the product must NOT contain (CONTAINS or MAY_CONTAIN)
     category_codes: list[str] | None = None
     unit_volume_l: Range | None = None      # size of ONE sales unit, litres
     unit_weight_kg: Range | None = None     # size of ONE sales unit, kg
@@ -101,7 +101,7 @@ class ProductHit(BaseModel):
     sales_unit: str
     unit_volume_l: float | None
     unit_weight_kg: float | None
-    allowed_lot_size: int | None
+    allowed_lot_size: float | None      # order quantity must be a multiple of this; 0.01 for most products
     temperature_condition: str | None
     claims: list[str] = []
     allergens_contains: list[str] = []
