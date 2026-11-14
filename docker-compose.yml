@@ -35,9 +35,14 @@ services:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/health')"]
 
   web:
-    build: { context: ., dockerfile: apps/web/Dockerfile }
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:   # inlined into the browser bundle at build time; rebuild after changing them
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY}
+        NEXT_PUBLIC_LANGFUSE_PROJECT_URL: ${NEXT_PUBLIC_LANGFUSE_PROJECT_URL:-}
     env_file: .env
-    profiles: ["web"]   # remove this line once apps/web has a Dockerfile
 
   grafana:   # Valio Aimo side: audit dashboard on http://localhost:3001, not behind the buyer app's nginx
     image: grafana/grafana-oss:11.5.2
