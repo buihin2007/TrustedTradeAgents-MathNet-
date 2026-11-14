@@ -20,7 +20,8 @@ A login app for a buyer (F&B manager) on top of Valio Aimo's MCP gateway.
 | `services/mcp/search/` | P1 | Criteria -> guarded SQL -> hybrid rank |
 | `services/mcp/` (rest) | P2 | Tools, Gate middleware, Jev, order policy, held orders |
 | `services/api/` | P3 | Agent pipeline, audit log, REST for web |
-| `apps/web/`, `infra/`, `docker-compose.yml`, `scripts/rogue_agent.py` | P4 | |
+| `apps/web/`, `infra/nginx/`, `docker-compose.yml`, `scripts/rogue_agent.py` | P4 | |
+| `infra/grafana/`, `scripts/demo/` | UI-UX (or P2) | Valio Aimo audit dashboard |
 | Design | UI-UX | Delivers screens and tokens to P4, no code folder |
 
 Only edit your own folders. Need a change elsewhere: ask its owner.
@@ -40,7 +41,10 @@ Only edit your own folders. Need a change elsewhere: ask its owner.
 - Ports: web 3000, api 8000, mcp 9000. Only nginx is published (8080).
 - `api` exposes public routes under `/api/...`. `mcp` serves MCP at `/mcp` (no trailing slash).
 - `api` calls the gateway at `MCP_URL=http://nginx/mcp`, never `mcp:9000`, so rate limits apply.
-- Database: `supabase/migrations/0001_init.sql`, demo data `supabase/seed.sql`. Embeddings are `vector(1536)` = `EMBED_MODEL=openai/text-embedding-3-small`.
+- Database: `supabase/migrations/0001_init.sql`, `0002_audit_dashboard.sql`, demo data `supabase/seed.sql`, fake gateway traffic `scripts/demo/fake_gateway_events.sql`. Embeddings are `vector(1536)` = `EMBED_MODEL=openai/text-embedding-3-small`.
+- Grafana (Valio Aimo audit dashboard) runs on http://localhost:3001, outside nginx. It reads only the `wholesaler.v_audit_*` views as role `dashboard_ro` (migration 0002). Never point it at base tables.
+- Every gate decision, including Gate-level rate limits (`RATE_LIMIT`), must write one row to `wholesaler.gateway_events`, or the dashboard cannot show it. Requests rejected with 429 by nginx never reach the gate.
+- Connections: Supabase session pooler allows 15 clients per role by default, shared by the whole team. Keep each service's DB pool at 2 connections max.
 - Generated SQL runs as: `BEGIN READ ONLY; SET LOCAL ROLE search_ro; SET LOCAL statement_timeout = '2s'; ...`.
 
 ## Contracts
@@ -70,7 +74,7 @@ uv add --editable ../../packages/contracts
 ## Commands
 
 ```bash
-docker compose up --build              # whole stack on http://localhost:8080
+docker compose up --build              # buyer app on http://localhost:8080, audit dashboard on http://localhost:3001
 docker compose run --rm import         # one-off data import
 uv run pytest                          # inside services/api or services/mcp
 npx @modelcontextprotocol/inspector    # point at http://localhost:8080/mcp with the agent key

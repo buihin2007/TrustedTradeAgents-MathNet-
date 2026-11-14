@@ -1,0 +1,18 @@
+# Read-only connection to Supabase for the Valio Aimo audit dashboard. Values come from .env.
+apiVersion: 1
+datasources:
+  - name: Valio Aimo audit (Supabase)
+    uid: tta-pg
+    type: grafana-postgresql-datasource
+    url: ${GRAFANA_DB_HOST}:5432
+    user: dashboard_ro.${SUPABASE_PROJECT_REF}
+    isDefault: true
+    editable: false
+    jsonData:
+      database: postgres
+      sslmode: require
+      postgresVersion: 1500
+      maxOpenConns: 2
+      maxIdleConns: 2
+    secureJsonData:
+      password: ${GRAFANA_DB_PASSWORD}

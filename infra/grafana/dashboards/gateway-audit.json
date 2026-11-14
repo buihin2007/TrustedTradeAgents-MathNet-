@@ -1,0 +1,726 @@
+{
+  "uid": "tta-gateway-audit",
+  "title": "Valio Aimo gateway: audit trail",
+  "tags": [
+    "tta",
+    "audit"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "5s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "intent",
+        "label": "Intent",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        }
+      },
+      {
+        "name": "langfuse_project_url",
+        "label": "Langfuse project URL",
+        "type": "textbox",
+        "hide": 2,
+        "query": "https://cloud.langfuse.com/project/CHANGE_ME",
+        "current": {
+          "text": "https://cloud.langfuse.com/project/CHANGE_ME",
+          "value": "https://cloud.langfuse.com/project/CHANGE_ME"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "EUR đặt tự động hoặc đã duyệt",
+      "description": "Tổng tiền các đơn placed trong khoảng thời gian đang chọn.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "tta-pg"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "tta-pg"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "table",
+          "rawSql": "select coalesce(sum(amount_eur), 0) as eur from wholesaler.v_audit_orders where status = 'placed' and $__timeFilter(created_at)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyEUR",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Đơn đang chờ người duyệt",
+      "description": "Đơn held ngay lúc này, không phụ thuộc khoảng thời gian.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "tta-pg"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "tta-pg"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "table",
+          "rawSql": "select count(*) as held from wholesaler.v_audit_orders where status = 'held'"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "orange"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Lời gọi bị chặn",
+      "description": "",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "tta-pg"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "tta-pg"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "table",
+          "rawSql": "select count(*) as blocked from wholesaler.v_audit_gateway where decision = 'block' and $__timeFilter(ts)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "red"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Tỉ lệ không cho qua",
+      "description": "Phần trăm lời gọi bị chặn hoặc phải hỏi người.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "tta-pg"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "tta-pg"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "table",
+          "rawSql": "select coalesce(100.0 * count(*) filter (where decision <> 'allow') / nullif(count(*), 0), 0) as pct from wholesaler.v_audit_gateway where $__timeFilter(ts)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "purple"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Lời gọi tool theo phút, theo quyết định của Gate",
+      "description": "",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "tta-pg"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 16,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "tta-pg"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "time_series",
+          "rawSql": "select $__timeGroupAlias(ts, '1m'), decision as metric, count(*) as value from wholesaler.v_audit_gateway where $__timeFilter(ts) group by 1, 2 order by 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "stacking": {
+              "mode": "normal"
+            },
+            "fillOpacity": 80
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "allow"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ask_human"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "block"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "type": "barchart",
+      "title": "Mã lý do nhiều nhất",
+      "description": "",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "tta-pg"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 4,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "tta-pg"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "table",
+          "rawSql": "select r as reason, count(*) as calls from wholesaler.v_audit_gateway, unnest(reasons) as r where $__timeFilter(ts) group by 1 order by 2 desc limit 10"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "xField": "reason",
+        "showValue": "auto",
+        "legend": {
+          "showLegend": false
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Đơn hàng: ai duyệt, bao nhiêu tiền, mất bao lâu",
+      "description": "",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "tta-pg"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "tta-pg"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "table",
+          "rawSql": "select created_at as \"Lúc tạo\", status as \"Trạng thái\", agent_name as \"Agent\", amount_eur as \"EUR\", array_to_string(reasons, ', ') as \"Lý do\", option_count as \"Phương án\", decided_by::text as \"Người duyệt\", seconds_to_decision as \"Giây tới khi duyệt\", trace_id as \"Trace\" from wholesaler.v_audit_orders where $__timeFilter(created_at) and ('${intent}' = '' or intent_id::text = '${intent}') order by created_at desc limit 100"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Trạng thái"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "allow": {
+                        "color": "blue",
+                        "index": 0
+                      },
+                      "ask_human": {
+                        "color": "orange",
+                        "index": 1
+                      },
+                      "block": {
+                        "color": "red",
+                        "index": 2
+                      },
+                      "placed": {
+                        "color": "blue",
+                        "index": 3
+                      },
+                      "held": {
+                        "color": "orange",
+                        "index": 4
+                      },
+                      "blocked": {
+                        "color": "red",
+                        "index": 5
+                      },
+                      "rejected": {
+                        "color": "purple",
+                        "index": 6
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Trace"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Mở trace trong Langfuse",
+                    "url": "${langfuse_project_url}/traces/${__value.raw}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "EUR"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyEUR"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Agent và mandate đang hiệu lực",
+      "description": "",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "tta-pg"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 12,
+        "h": 6
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "tta-pg"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "table",
+          "rawSql": "select name as \"Agent\", status as \"Trạng thái\", mandate_version as \"Mandate v\", auto_limit_eur as \"Tự mua ≤ EUR\", order_limit_eur as \"Một đơn ≤ EUR\", weekly_budget_eur as \"Tuần ≤ EUR\", signed_at as \"Ký lúc\" from wholesaler.v_audit_agents order by name"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Trạng thái"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "active": {
+                        "color": "blue",
+                        "index": 0
+                      },
+                      "paused": {
+                        "color": "red",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "Intent chạm nhiều sản phẩm nhất (trần 200)",
+      "description": "",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "tta-pg"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 20,
+        "w": 12,
+        "h": 6
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "tta-pg"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "table",
+          "rawSql": "select intent_id::text as \"Intent\", request_text as \"Yêu cầu\", distinct_products as \"Sản phẩm đã chạm\", created_at as \"Tạo lúc\" from wholesaler.v_audit_intents where $__timeFilter(created_at) order by distinct_products desc limit 20"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Sản phẩm đã chạm"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "blue",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 150
+                    },
+                    {
+                      "color": "red",
+                      "value": 200
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "type": "table",
+      "title": "Nhật ký cổng: mỗi tool call một dòng",
+      "description": "Lọc theo Intent ở ô trên cùng. Bấm Trace để mở Langfuse.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "tta-pg"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 26,
+        "w": 24,
+        "h": 12
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "tta-pg"
+          },
+          "editorMode": "code",
+          "rawQuery": true,
+          "format": "table",
+          "rawSql": "select ts as \"Lúc\", agent_name as \"Agent\", tool as \"Tool\", decision as \"Quyết định\", array_to_string(reasons, ', ') as \"Lý do\", round(jev_min::numeric, 2) as \"Jev thấp nhất\", row_count as \"Số dòng\", latency_ms as \"ms\", intent_id::text as \"Intent\", trace_id as \"Trace\" from wholesaler.v_audit_gateway where $__timeFilter(ts) and ('${intent}' = '' or intent_id::text = '${intent}') order by ts desc limit 500"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Quyết định"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "allow": {
+                        "color": "blue",
+                        "index": 0
+                      },
+                      "ask_human": {
+                        "color": "orange",
+                        "index": 1
+                      },
+                      "block": {
+                        "color": "red",
+                        "index": 2
+                      },
+                      "placed": {
+                        "color": "blue",
+                        "index": 3
+                      },
+                      "held": {
+                        "color": "orange",
+                        "index": 4
+                      },
+                      "blocked": {
+                        "color": "red",
+                        "index": 5
+                      },
+                      "rejected": {
+                        "color": "purple",
+                        "index": 6
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Trace"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Mở trace trong Langfuse",
+                    "url": "${langfuse_project_url}/traces/${__value.raw}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

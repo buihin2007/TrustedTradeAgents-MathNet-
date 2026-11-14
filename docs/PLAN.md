@@ -100,7 +100,7 @@ data/                     file dữ liệu đề cho, nằm trong .gitignore
 
 1. Hợp đồng trước, code sau. Phase 0 chốt `packages/contracts` và chữ ký tool. Sau đó ai đổi hợp đồng phải báo cả nhóm.
 2. Mỗi người chỉ sửa thư mục của mình. Cần đổi chỗ khác thì nhờ chủ thư mục.
-3. Nhánh ngắn, ví dụ `p2/gate-policy`, sống dưới 90 phút. Rebase lên `main` trước khi mở PR.
+3. Mỗi người một nhánh: `db-hin` (P1 + P4), `mcp-hoang` (P2), `api-chu` (P3). Merge vào `main` bằng PR ở mỗi mốc; giữa các mốc chạy `git pull origin main`.
 4. `main` luôn chạy được bằng `docker compose up --build`. PR làm hỏng lệnh này thì revert ngay.
 5. Một người giữ migration. Người khác gửi SQL cho P1, không tự thêm file.
 6. Không commit secret và không commit `data/`. File sản phẩm nặng 87 MB, sát trần 100 MB mỗi file của GitHub.
@@ -141,7 +141,8 @@ Ví dụ tiêu chí xong của P2: `pytest services/mcp/tests/test_policy.py` xa
 | `wholesaler.orgs`, `agents`, `mandates` | Khách hàng, key của agent (lưu hash), hạn mức đã ký | Seed, `mcp` |
 | `wholesaler.intents` | Yêu cầu gốc do người đăng ký, kèm `user_id` | `mcp` |
 | `wholesaler.orders`, `order_lines` | Đơn `placed`, `held`, `blocked`, `rejected` | `mcp` |
-| `wholesaler.gateway_events` | Mỗi tool call một dòng: quyết định, lý do, SQL, trace | `mcp` |
+| `wholesaler.gateway_events` | Mỗi tool call một dòng: quyết định, lý do, SQL, trace. Chỉ thêm, có trigger chặn sửa và xoá | `mcp` |
+| `wholesaler.v_audit_*` | 4 view cho dashboard Grafana: lời gọi, đơn hàng, intent, agent và mandate. Không lộ `key_hash` | Migration 0002 |
 | `buyer.profiles` | Người dùng thuộc tổ chức nào | Seed |
 | `buyer.requests`, `request_options`, `questions` | Yêu cầu, các phương án, câu hỏi cho người dùng | `api` |
 | `buyer.audit_events` | Nhật ký quyết định của agent, chỉ thêm | `api` |
@@ -603,6 +604,39 @@ OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
 
 Trong prototype hai phía đẩy trace về cùng một project Langfuse để demo một trace xuyên suốt. Ngoài đời mỗi bên có backend riêng và chỉ chia sẻ `trace_id`.
 
+### Dashboard audit phía Valio Aimo: Grafana
+
+Valio Aimo có một dashboard riêng, tách khỏi app của người mua. Đó là Grafana chạy trong cùng compose ở `http://localhost:3001`, không đi qua nginx của app.
+
+| Phương án | Điểm mạnh | Điểm yếu |
+| --- | --- | --- |
+| Grafana (chọn) | Đọc thẳng Postgres bằng datasource có sẵn; tự làm mới 5 giây; công cụ vận hành quen thuộc với đội IT | Phải viết SQL cho từng panel |
+| Streamlit | Tự do nhất | Là code tự viết, phải tự làm đăng nhập |
+| Metabase | Đẹp, hợp người làm kinh doanh | Bản mã nguồn mở không xuất dashboard ra file, nên ba máy khó có cùng một dashboard |
+| Chỉ dùng Langfuse | Không tốn công | Chỉ thấy trace, không thấy đơn hàng, tiền, mandate |
+
+Grafana trả lời chuyện gì đã xảy ra, bao nhiêu lần, do ai. Langfuse trả lời từng bước của một request. Mỗi dòng trên Grafana có link `trace_id` sang Langfuse.
+
+| Câu hỏi của Valio Aimo | Panel |
+| --- | --- |
+| Bao nhiêu EUR đã đặt, bao nhiêu đơn đang chờ người, bao nhiêu lời gọi bị chặn | 4 ô số trên cùng |
+| Agent gọi gì theo thời gian, cổng cho qua, giữ hay chặn | Cột chồng theo phút, màu theo quyết định |
+| Vì sao bị giữ hoặc chặn | Top 10 mã lý do |
+| Ai duyệt đơn nào, bao nhiêu tiền, mất bao lâu | Bảng đơn hàng |
+| Agent nào đang chạy theo mandate nào | Bảng agent và hạn mức |
+| Có dấu hiệu quét danh mục không | Intent chạm nhiều sản phẩm nhất, đổi màu ở 150 và 200 |
+| Truy một yêu cầu từ đầu đến cuối | Nhật ký cổng lọc theo intent, cột Trace mở Langfuse |
+
+Cách nối:
+
+1. Migration `0002_audit_dashboard.sql` tạo role `dashboard_ro`. Role này chỉ đọc được 4 view `v_audit_*`, có `statement_timeout` 5 giây, và mọi giao dịch của nó là chỉ đọc.
+2. Mật khẩu của role đặt tay trong SQL Editor, không nằm trong git: `alter role dashboard_ro with login password '...'`.
+3. Grafana đăng nhập pooler bằng username `dashboard_ro.<project-ref>`, tối đa 2 kết nối.
+4. Datasource và dashboard nằm trong `infra/grafana/` và được nạp lúc khởi động, nên máy nào chạy `docker compose up` cũng có cùng một dashboard.
+5. Trước khi Gate xong, chạy `scripts/demo/fake_gateway_events.sql` để có 300 lời gọi giả.
+
+Ràng buộc với Gate: mọi quyết định của Gate, kể cả rate limit ở tầng Gate (`RATE_LIMIT`), phải ghi một dòng `gateway_events`. Request bị nginx trả 429 không tới được Gate, nên không có trên dashboard.
+
 ## nginx, rate limit và Docker
 
 ### nginx
@@ -654,6 +688,7 @@ Rate limit có hai tầng, mỗi tầng chặn một kiểu lạm dụng:
 | `api` | Python 3.12, `uv` | Nội bộ 8000 |  |
 | `mcp` | Python 3.12, `uv` | Nội bộ 9000 | `mcp.run(transport="http", host="0.0.0.0", port=9000)` |
 | `import` | Dùng chung image `mcp` | Không | Profile `tools`, chạy một lần |
+| `grafana` | `grafana/grafana-oss:11.5.2` | `3001:3000` | Dashboard audit của Valio Aimo, không qua nginx |
 
 Lưu ý khi viết Dockerfile:
 
@@ -674,8 +709,9 @@ Lưu ý khi viết Dockerfile:
 | `AGENT_KEY` | `api` | Hash của nó nằm trong `wholesaler.agents` |
 | `MCP_URL` | `api` | `http://nginx/mcp` |
 | `OTEL_EXPORTER_OTLP_*` | `api`, `mcp` | Xem phần trace |
+| `SUPABASE_PROJECT_REF`, `GRAFANA_DB_HOST`, `GRAFANA_DB_PASSWORD`, `GRAFANA_ADMIN_PASSWORD` | `grafana` | Host là phần host của chuỗi Session pooler |
 
-Chạy lần đầu: `docker compose up --build`, sau đó `docker compose run --rm import`. Mở `http://localhost:8080`.
+Chạy lần đầu: `docker compose up --build`, sau đó `docker compose run --rm import`. App người mua ở `http://localhost:8080`, dashboard Valio Aimo ở `http://localhost:3001`.
 
 ## Phân công và mốc thời gian
 
@@ -689,7 +725,7 @@ Thứ tự build bảo đảm mỗi mốc đều demo được. Không cắt tí
 | P2 | Thành viên 2 | Cổng: tools, Gate, Jev, đơn hàng | `services/mcp/` trừ `search/` |
 | P3 | Thành viên 3 | Backend bên mua: luồng agent, audit | `services/api/` |
 | P4 | @ikm | Web và hạ tầng: Next.js, nginx, compose, trace, script demo | `apps/web/`, `infra/`, `docker-compose.yml`, `scripts/rogue_agent.py` |
-| UI-UX | Thành viên 4 | Thiết kế 6 trang và các trạng thái trên Claude Design, bắt đầu từ bản mẫu đã có | Không giữ thư mục code. Bàn giao token và màn hình cho P4 |
+| UI-UX | Thành viên 4 | Thiết kế 6 trang và các trạng thái trên Claude Design, bắt đầu từ bản mẫu đã có; dựng dashboard Grafana của Valio Aimo | `infra/grafana/`, `scripts/demo/`. Bàn giao token và màn hình cho P4 |
 
 ### Việc theo phase
 
@@ -697,8 +733,8 @@ Thứ tự build bảo đảm mỗi mốc đều demo được. Không cắt tí
 | --- | --- | --- | --- | --- |
 | 0 · 0:00 đến 0:45 | Hợp đồng criteria và kết quả search; compose 4 service và nginx; migration 0001; trang login | Chữ ký 13 tool, trả dữ liệu giả | Khung FastAPI, kiểm JWT | Chốt luồng người dùng và 6 trang từ bản mẫu đã có; chọn token màu và chữ |
 | 1 · 0:45 đến 4:00 | Import và embeddings; `hybrid_rank`, facets; search bằng template viết tay; trang requests và chi tiết request, gọi API thật; LLM sinh SQL | Auth bằng agent key; `get_price_availability` gọi API thật; `place_order` luôn `placed` | Luồng agent đủ 11 bước, bản thẳng chưa có ngoại lệ | Trang requests, chi tiết request, thẻ phương án với 3 trạng thái: tự động, cần người, bị chặn |
-| 2 · 4:00 đến 8:00 | Bốn lớp rào, cache theo hình dạng; trang approvals, mandate, audit; OTel ở cả hai service; chẩn đoán khi 0 kết quả | Gate đủ 9 bước, Jev, chính sách đơn, held và duyệt bằng JWT, `gateway_events` | Audit có chuỗi băm, câu hỏi cho người dùng, 4 phương án, lời giải thích | Trang approvals, mandate, audit; trạng thái rỗng, đang tải, lỗi; câu chữ trên giao diện |
-| 3 · 8:00 đến 11:00 | Áp giao diện UI-UX bàn giao; script agent hư; test rào SQL; README; nhánh trigram, Jev chấm lại | Thay thế, tách đơn, giá lệch, tạm dừng agent, test chính sách | Xử lý lỗi cổng, thử lại, test luồng | Rà app thật so với thiết kế, sửa lệch; chuẩn bị màn hình cho demo |
+| 2 · 4:00 đến 8:00 | Bốn lớp rào, cache theo hình dạng; trang approvals, mandate, audit; OTel ở cả hai service; chẩn đoán khi 0 kết quả | Gate đủ 9 bước, Jev, chính sách đơn, held và duyệt bằng JWT, `gateway_events` | Audit có chuỗi băm, câu hỏi cho người dùng, 4 phương án, lời giải thích | Trang approvals, mandate, audit; trạng thái rỗng, đang tải, lỗi; câu chữ trên giao diện; chạy Grafana với dữ liệu giả, chỉnh panel |
+| 3 · 8:00 đến 11:00 | Áp giao diện UI-UX bàn giao; script agent hư; test rào SQL; README; nhánh trigram, Jev chấm lại | Thay thế, tách đơn, giá lệch, tạm dừng agent, test chính sách | Xử lý lỗi cổng, thử lại, test luồng | Rà app thật so với thiết kế, sửa lệch; nối Grafana vào dữ liệu thật của Gate; chuẩn bị màn hình cho demo |
 | Dự phòng · 11:00 đến 12:00 | Sửa lỗi; quay video dự phòng | Sửa lỗi | Tập demo hai lần | Rà lần cuối |
 
 Trong cột P1 + P4, việc xếp theo thứ tự làm: việc đang chặn người khác đứng trước. UI-UX bàn giao hai đợt: cuối Phase 1 và trước giờ thứ 8, để P4 kịp áp ở Phase 3.
@@ -740,8 +776,8 @@ Kiểm tay bằng MCP Inspector: chạy `npx @modelcontextprotocol/inspector`, t
 | 2 | Yêu cầu 300 lít | Đơn `held`; người mua chọn một phương án; chuyển `placed` | Tự chủ và kiểm soát 20% |
 | 3 | Yêu cầu sản phẩm thiếu hàng | Phương án tách đơn hoặc thay thế, có nhãn rõ | Xử lý ngoại lệ 15% |
 | 4 | Yêu cầu 600 lít | `blocked` với `OVER_ORDER_LIMIT`; không đơn nào được tạo | Tự chủ và kiểm soát 20% |
-| 5 | Chạy `rogue_agent.py`: quét danh mục, đặt món không ai yêu cầu, bắn dồn | 429 từ nginx; Gate chặn vì vượt trần và vì điểm Jev thấp | Kiểm soát; ngoại lệ |
-| 6 | Mở audit, bấm sang trace; mở MCP Inspector như một agent khác | Cùng một `trace_id` ở hai phía; agent ngoài dùng chung cửa | Mở và đường ra production 15% |
+| 5 | Chạy `rogue_agent.py`: quét danh mục, đặt món không ai yêu cầu, bắn dồn | 429 từ nginx; Gate chặn vì vượt trần và vì điểm Jev thấp; cột đỏ trên Grafana nhảy lên ngay | Kiểm soát; ngoại lệ |
+| 6 | Mở audit của người mua, rồi dashboard Grafana của Valio Aimo, bấm sang trace; mở MCP Inspector như một agent khác | Cùng một `trace_id` ở hai phía; agent ngoài dùng chung cửa và hiện trên dashboard | Mở và đường ra production 15% |
 
 Kịch bản 3 cần dữ liệu ổn định. Ưu tiên tìm một mã có tồn kho thấp thật qua API. Phương án lùi là biến `DEMO_FORCE_SHORTAGE=<product_id>` để cổng trả tồn kho thấp cho đúng một mã. Dùng biến này thì nói rõ khi trình bày.
 
@@ -751,7 +787,7 @@ Kịch bản 3 cần dữ liệu ổn định. Ưu tiên tìm một mã có tồ
 2. 40 giây: kịch bản 1. Nhấn vào việc người dùng không phải sửa tay.
 3. 50 giây: kịch bản 2, màn hình duyệt.
 4. 40 giây: kịch bản 5. Agent hư bị chặn ở ba chỗ: nginx, trần cứng, Jev.
-5. 30 giây: kịch bản 6, audit hai phía và trace.
+5. 30 giây: kịch bản 6, audit hai phía: trang audit của người mua và dashboard Grafana của Valio Aimo, rồi trace.
 
 Kịch bản 3 và 4 để dành cho phần hỏi đáp.
 
@@ -759,6 +795,7 @@ Kịch bản 3 và 4 để dành cho phần hỏi đáp.
 
 | Rủi ro | Dấu hiệu | Phương án lùi |
 | --- | --- | --- |
+| Cả nhóm cùng kết nối một Supabase làm đầy pool | Lỗi `max clients reached in session mode`, pool mặc định 15 mỗi role | Mỗi service tối đa 2 kết nối; vẫn đầy thì chuyển `api` và `mcp` sang Transaction pooler cổng 6543 và tắt prepared statement |
 | Endpoint Jev còn ở bản alpha, có thể đổi hoặc chậm | Lỗi 4xx, 5xx, quá 2 giây | Lệnh đọc cho qua kèm cờ; lệnh ghi giữ chờ người. Hệ thống vẫn chạy bằng luật code |
 | LLM sinh SQL sai cú pháp hoặc sai nghĩa | Parser từ chối; lớp kiểm lại loại dòng | Thử lại 1 lần, rồi dùng template viết tay cho hình dạng đó |
 | Hàm `hybrid_rank` là bản nháp chưa chạy thử | Lỗi khi tạo hàm hoặc kết quả lạ | P1 thử 5 truy vấn thật ở Phase 1; hỏng thì chạy riêng nhánh full-text |
@@ -769,6 +806,7 @@ Kịch bản 3 và 4 để dành cho phần hỏi đáp.
 | AI bịa API của thư viện mới | Import lỗi, tham số không tồn tại | Dán link tài liệu vào prompt; khoá phiên bản; chạy thử ngay sau khi sinh code |
 | Bốn người sửa chồng nhau | Conflict ở `contracts` hoặc migration | Một chủ cho mỗi thư mục; đổi hợp đồng phải báo nhóm |
 | Đường dẫn `/mcp` trả 307 | Client MCP báo lỗi chuyển hướng | Đặt cùng một đường dẫn, có hoặc không có gạch chéo cuối, ở cả nginx và client |
+| Grafana không nối được database | Panel báo lỗi datasource | Kiểm `dashboard_ro` đã có `login password`; username phải là `dashboard_ro.<project-ref>` |
 | Demo gãy vì mạng | Không gọi được OpenRouter hoặc API đề | Quay sẵn video 3 phút ở mốc M3 |
 
 ### Tài liệu phải dán cho AI trước khi code
