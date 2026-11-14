@@ -50,7 +50,7 @@ rules = {
     "VALIO_API_BASE": r"^https://",
     "VALIO_API_KEY": r"^junct_",
     "VALIO_CUSTOMER": r".+",
-    "AGENT_KEY": r"^.{16,}$",
+    "AGENT_KEY": r"^tta_[A-Za-z0-9_-]{24,}$",   # gateway routes Bearer tokens starting with tta_ to agent auth
     "MCP_URL": r"^http://nginx/mcp$",
     "LANGFUSE_PUBLIC_KEY": r"^pk-lf-(?!pk-lf-)",
     "LANGFUSE_SECRET_KEY": r"^sk-lf-(?!sk-lf-)",
