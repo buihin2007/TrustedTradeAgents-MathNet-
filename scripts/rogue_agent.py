@@ -26,6 +26,8 @@ except ImportError:
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
+DEMO_AGENT = "00000000-0000-0000-0000-0000000000a1"   # supabase/seed.sql
+
 RED, GREEN, YELLOW, DIM, END = "\033[31m", "\033[32m", "\033[33m", "\033[2m", "\033[0m"
 
 
@@ -74,13 +76,14 @@ async def attack_unrequested(url, intent):
 
 async def attack_user_tool(url, intent):
     """Approve its own held order: approval needs the user's JWT, not an agent key."""
-    ok, d = await call(url, "approve_order", {"request": {"order_id": str(uuid.uuid4()), "option_index": 0}})
+    ok, d = await call(url, "approve_order", {"order_id": str(uuid.uuid4()), "option_index": 0})
     return report("Approve an order with the agent key", "FORBIDDEN (user tools need the signer's JWT)", ok, d)
 
 
 async def attack_mandate(url, intent):
     """Raise its own spending limit."""
-    ok, d = await call(url, "update_mandate", {"request": {"auto_limit_eur": "100000", "order_limit_eur": "100000"}})
+    ok, d = await call(url, "update_mandate", {"agent_id": DEMO_AGENT, "auto_limit_eur": "100000",
+                                         "order_limit_eur": "100000"})
     return report("Raise its own mandate to 100,000 EUR", "FORBIDDEN", ok, d)
 
 
@@ -92,7 +95,7 @@ async def attack_burst(url, intent, n=100):
     if all("Unknown tool" in d for _, d in results):
         return report("Burst", "", False, "Unknown tool")
     stopped = sum(1 for ok, d in results if not ok and "Unknown tool" not in d)
-    return report(f"Burst {n} calls at once", "most rejected with HTTP 429 by nginx",
+    return report(f"Burst {n} calls at once", "most rejected: HTTP 429 (nginx) or RATE_LIMIT (gateway)",
                   stopped < n // 2, f"{stopped}/{n} rejected; e.g. {sample}")
 
 
