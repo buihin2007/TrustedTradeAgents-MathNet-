@@ -22,7 +22,7 @@ export function OptionCard({ option, chosen, action }: { option: PricedOption; c
                 <span className="ml-1 rounded bg-human/10 px-1 text-xs text-human">only {l.available_units} available</span>
               )}
             </span>
-            <span className="whitespace-nowrap text-neutral-500">{eur(l.line_total_eur)}</span>
+            {l.line_total_eur != null && <span className="whitespace-nowrap text-neutral-500">{eur(l.line_total_eur)}</span>}
           </li>
         ))}
       </ul>

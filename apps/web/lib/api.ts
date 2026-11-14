@@ -1,4 +1,5 @@
 "use client";
+import type { OptionPreview, PricedOption } from "./types";
 import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 
@@ -44,3 +45,15 @@ export function useApi<T>(path: string | null, pollMs?: number) {
 
 export const eur = (v: string | number | null | undefined) =>
   v == null ? "-" : `${Number(v).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} EUR`;
+
+/** Options come priced (from the gateway) or as previews (from the buyer API); render both the same way. */
+export function toPriced(o: PricedOption | OptionPreview): PricedOption {
+  if (!("option" in o)) return o;
+  return {
+    label: o.option.label,
+    lines: o.option.lines.map((l) => ({ ...l, name_en: null, unit_price_eur: null, line_total_eur: null, available_units: null })),
+    total_eur: o.total_eur,
+    explanation: o.option.explanation,
+    reasons: [],
+  };
+}

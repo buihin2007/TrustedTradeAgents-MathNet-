@@ -15,17 +15,19 @@ export default function MandatePage() {
   const [form, setForm] = useState<Record<string, string>>({});
   const [allowSub, setAllowSub] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
+  const [agentStatus, setAgentStatus] = useState<"active" | "paused">("active");
 
   useEffect(() => {
     if (!data) return;
     setForm(Object.fromEntries(FIELDS.map(([k]) => [k, String(data[k])])));
     setAllowSub(data.allow_substitution);
+    if (data.agent_status) setAgentStatus(data.agent_status);
   }, [data]);
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await api("/mandate", { method: "PUT", body: JSON.stringify({ ...form, allow_substitution: allowSub }) });
+      await api("/mandate", { method: "PUT", body: JSON.stringify({ ...form, allow_substitution: allowSub, allowed_category_codes: data?.allowed_category_codes ?? null }) });
       setMsg("Saved as a new mandate version.");
       reload();
     } catch (err) {
@@ -33,13 +35,17 @@ export default function MandatePage() {
     }
   };
   const toggleAgent = async () => {
-    await api(`/agent/${data?.agent_status === "paused" ? "resume" : "pause"}`, { method: "POST" });
-    reload();
+    try {
+      const res = await api<{ status: "active" | "paused" }>(`/agent/${agentStatus === "paused" ? "resume" : "pause"}`, { method: "POST" });
+      setAgentStatus(res.status);
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : String(err));
+    }
   };
 
   if (error) return <p className="text-human">Could not load mandate: {error}</p>;
   if (!data) return <p className="text-neutral-500">Loading...</p>;
-  const paused = data.agent_status === "paused";
+  const paused = agentStatus === "paused";
 
   return (
     <div className="max-w-xl space-y-6">

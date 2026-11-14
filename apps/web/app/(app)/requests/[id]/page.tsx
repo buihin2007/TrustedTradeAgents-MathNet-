@@ -3,7 +3,7 @@ import Link from "next/link";
 import { use, useState } from "react";
 import { OptionCard } from "@/components/OptionCard";
 import { Status } from "@/components/Status";
-import { api, eur, useApi } from "@/lib/api";
+import { api, eur, toPriced, useApi } from "@/lib/api";
 import type { RequestDetail } from "@/lib/types";
 
 const DONE = ["placed", "blocked", "rejected", "failed"];
@@ -15,8 +15,10 @@ export default function RequestPage({ params }: { params: Promise<{ id: string }
   const [answer, setAnswer] = useState("");
   if (r && DONE.includes(r.status) && !stopPolling) setStopPolling(true);
 
+  const open = r?.questions.find((q) => q.answer == null) ?? null;
   const send = async (value: string) => {
-    await api(`/requests/${id}/answer`, { method: "POST", body: JSON.stringify({ answer: value }) });
+    if (!open) return;
+    await api(`/requests/${id}/answer`, { method: "POST", body: JSON.stringify({ question_id: open.id, answer: value }) });
     setAnswer("");
     setStopPolling(false);
     reload();
@@ -46,11 +48,11 @@ export default function RequestPage({ params }: { params: Promise<{ id: string }
         </div>
       )}
 
-      {r.question && r.status === "asking" && (
+      {open && r.status === "asking" && (
         <div className="space-y-3 rounded-lg border border-human/40 bg-human/5 p-4">
-          <p className="font-medium">{r.question.question}</p>
+          <p className="font-medium">{open.question}</p>
           <div className="flex flex-wrap gap-2">
-            {r.question.choices.map((c) => (
+            {open.choices.map((c) => (
               <button key={c} onClick={() => send(c)} className="rounded border border-human/40 bg-white px-3 py-1 text-sm hover:bg-human/10">
                 {c}
               </button>
@@ -73,9 +75,11 @@ export default function RequestPage({ params }: { params: Promise<{ id: string }
         </div>
       )}
 
-      {r.options.length > 0 && (
+      {(r.order?.options.length || r.options.length) > 0 && (
         <div className="grid gap-4 md:grid-cols-2">
-          {r.options.map((o, i) => <OptionCard key={o.label} option={o} chosen={r.order?.chosen_index === i} />)}
+          {(r.order?.options ?? r.options.map(toPriced)).map((o, i) => (
+            <OptionCard key={`${o.label}-${i}`} option={o} chosen={r.order?.chosen_index === i} />
+          ))}
         </div>
       )}
     </div>

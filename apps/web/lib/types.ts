@@ -19,8 +19,8 @@ export interface PricedLine {
   product_id: number;
   name_en: string | null;
   quantity_units: number;
-  unit_price_eur: Money;
-  line_total_eur: Money;
+  unit_price_eur: Money | null;   // null on previews (not yet priced by the gateway)
+  line_total_eur: Money | null;
   available_units: number | null;
   substitute_for: number | null;
 }
@@ -31,6 +31,14 @@ export interface PricedOption {
   total_eur: Money;
   explanation: string | null;
   reasons: string[];
+}
+
+/** Built by the buyer API before place_order; normalise with toPriced() before rendering. */
+export interface OptionPreview {
+  option: { label: OptionLabel; lines: { product_id: number; quantity_units: number; substitute_for: number | null }[]; explanation: string | null };
+  total_eur: Money;
+  supplied_quantity: Money;
+  available: boolean;
 }
 
 export interface Order {
@@ -44,6 +52,8 @@ export interface Order {
   delivery_date: string;
   created_at: string;
   decided_at: string | null;
+  decided_by: string | null;
+  trace_id: string | null;
 }
 
 export interface Question {
@@ -51,21 +61,21 @@ export interface Question {
   question: string;
   choices: string[];
   answer: string | null;
+  asked_at: string;
+  answered_at: string | null;
 }
 
 export interface RequestDetail extends RequestSummary {
   parsed: Record<string, unknown> | null;   // ParsedRequest from the LLM: shown as chips
-  options: PricedOption[];
-  question: Question | null;                 // set while status = "asking"
+  options: (PricedOption | OptionPreview)[];
+  questions: Question[];                     // the open one has answer = null (status "asking")
   order: Order | null;
   error: string | null;
   trace_id: string | null;
 }
 
-export interface Approval extends Order {
-  request_id: string;
-  request_text: string;
-}
+/** GET /api/approvals returns held Orders. */
+export type Approval = Order;
 
 export interface MandateView {
   auto_limit_eur: Money;
@@ -73,9 +83,13 @@ export interface MandateView {
   weekly_budget_eur: Money;
   price_tolerance_pct: Money;
   allow_substitution: boolean;
+  allowed_category_codes: string[] | null;
+  mandate_id: string;
+  agent_id: string;
   version: number;
+  signed_by: string;
   signed_at: string;
-  agent_status: "active" | "paused";
+  agent_status?: "active" | "paused";       // not returned by the API yet; the page tracks it locally
 }
 
 export interface AuditEvent {
