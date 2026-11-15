@@ -22,7 +22,10 @@ Mười một lựa chọn đầu đến từ buổi grill; năm dòng cuối l�
 | Gate | Luật số do code kiểm: danh tính, mandate, trần, chính sách đơn | Grill |
 | Hỏi lại | Mỗi lần một câu trắc nghiệm, có ô gõ thêm; hiện từng bước của agent theo thời gian thực | Làm lại 15/11 |
 | Không nêu món | Hỏi số người và ngày, gợi ý 3 món theo hàng Valio còn đúng ngày giao | Làm lại 15/11 |
-| Đặt hàng | Agent dựng 3 giỏ; người mua chọn một rồi mới gửi lên cổng | Làm lại 15/11 |
+| Đặt hàng | Giỏ tốt nhất đủ hàng, dưới hạn mức tự mua, không có thay thế: agent tự đặt. Còn lại người mua chọn giỏ | Sau khi so với đề |
+| Mandate demo | Tự mua 300, một đơn 3.000, một tuần 10.000 EUR: câu ví dụ của đề (1.000 l sữa, khoảng 1.200 EUR) ra `held`, không bị chặn | Sau khi so với đề |
+| Trust protocol | Báo giá ký Ed25519, khoá công khai ở `/.well-known/jwks.json`, hiệu lực 15 phút; đơn trên báo giá hết hạn bị giữ | Sau khi so với đề |
+| Thiếu hàng | Tách qua nhiều mã, rồi cặp thay thế của Valio (luôn chờ duyệt), rồi thay thế theo công thức, rồi giao một phần | Sau khi so với đề |
 | Duyệt đơn | Cổng MCP giữ đơn ở trạng thái held; chỉ mở bằng JWT Supabase của người dùng | Grill |
 | Hạn sử dụng | Không làm | Grill |
 | Tách dữ liệu | 1 project Supabase, 2 schema: `buyer` và `wholesaler` | Mặc định |
@@ -479,7 +482,7 @@ Mọi endpoint kiểm JWT bằng `supabase.auth.get_claims(jwt)`. Hàm này ki�
 7. **Giá và tồn kho.** Một lần `get_price_availability` cho tối đa 50 mã, đúng ngày giao. Ghi `price.checked`.
 8. **Gợi ý món theo kho.** Mỗi món hiện số nguyên liệu còn hàng hôm đó và giá ước tính mỗi người. Người mua tick món, gõ món khác, hoặc chọn "Suggest other dishes" để LLM gợi ý món khác tránh các nguyên liệu đang thiếu. Ghi `menu.suggested`. Nếu Valio báo 0 hàng cho mọi mã trong ngày đó, agent không gợi ý món mà hỏi ngày khác.
 9. **Dựng giỏ bằng code** (`sourcing.py`), xem bảng dưới. Ghi `options.built`.
-10. **Người mua chọn giỏ**, hoặc dời sang ngày sớm nhất đủ hàng, hoặc huỷ.
+10. **Tự đặt hay hỏi.** Giỏ tốt nhất đủ hàng, dưới hạn mức tự mua, không có thay thế thì agent đặt luôn (`AGENT_AUTO_ORDER=0` để luôn hỏi). Còn lại người mua chọn giỏ, dời sang ngày sớm nhất đủ hàng, hoặc huỷ.
 11. Gọi `place_order` với các giỏ và giỏ được chọn. Ghi `order.placed`, `gate.held` hoặc `order.blocked`.
 
 Một request gọi cổng 3 lần (intent, tìm, giá) và gọi LLM 1 lần (thêm 1 lần cho thực đơn). Snapshot mới nhất nằm trong bộ nhớ của `api` để đẩy qua SSE; trạng thái bền nằm trong `buyer.requests.parsed` (`plan`, `feed`, `baskets`).
@@ -494,9 +497,11 @@ Một request gọi cổng 3 lần (intent, tìm, giá) và gọi LLM 1 lần (t
 
 Khi không sản phẩm nào đủ hàng, mỗi giỏ thử lần lượt:
 
-1. Nguyên liệu thay thế của công thức (ví dụ cá hồi đổi sang cá hồi vân), kèm ghi chú món thay đổi thế nào.
-2. Giao một phần, ghi rõ số đơn vị còn.
-3. Báo thiếu, kèm lý do (không có trong danh mục, hết hàng hôm đó, đã qua giờ chốt đơn) và ngày sớm nhất có hàng.
+1. Tách qua nhiều mã của cùng nguyên liệu cho đủ lượng.
+2. Cặp thay thế chính thức của Valio (`get_substitutes`): dòng mang `substitute_for`, cổng giữ đơn chờ duyệt (`SUBSTITUTION`). Agent lấy báo giá mới gồm cả mã gốc và mã thay thế.
+3. Nguyên liệu thay thế của công thức (ví dụ cá hồi đổi sang cá hồi vân), kèm ghi chú món thay đổi thế nào.
+4. Giao một phần, ghi rõ số đơn vị còn.
+5. Báo thiếu, kèm lý do (không có trong danh mục, hết hàng hôm đó, đã qua giờ chốt đơn) và ngày sớm nhất có hàng.
 
 Số đơn vị cần mua cho mỗi dòng:
 
@@ -515,7 +520,11 @@ units  = ceil(amount / unit_size), làm tròn lên bội số của bước lô
 | 45 lít | 1 lít | 10 hộp | 50 hộp |
 | 100 người × 120 g cá | thùng 2 kg | 1 | 6 thùng |
 
-Mỗi giỏ ghi sẵn cổng sẽ làm gì theo mandate hiện hành: đặt ngay, chờ duyệt, hay bị chặn. Đây chỉ là dự đoán; quyết định thật là của cổng.
+Mỗi giỏ ghi sẵn cổng sẽ làm gì theo mandate hiện hành: đặt ngay, chờ duyệt, hay bị chặn. Đây chỉ là dự đoán; quyết định thật là của cổng. Thẻ giỏ còn hiện độ tin cậy giao hàng (trung bình theo tiền), CO2 ước tính (trung bình theo nhóm hàng của Valio) và nguồn gốc từng sản phẩm.
+
+### Báo giá ký số
+
+`get_price_availability` trả `valid_until` (15 phút), `key_id` và `signature`: chữ ký Ed25519 trên JSON chuẩn hoá của mã báo giá, ngày giao, hạn hiệu lực và từng dòng giá, tồn kho (`tta_contracts.quote_signing_bytes`). Khoá công khai ở `/.well-known/jwks.json`. Agent của mình kiểm chữ ký trước khi dùng số liệu (`app/trust.py`); agent bên ngoài làm theo `docs/AGENT_INTEGRATION.md`. Gửi đơn trên báo giá hết hạn thì cổng coi như không có giá tham chiếu và giữ đơn (`PRICE_MOVED`).
 
 ### Các kiểu kết thúc
 
@@ -806,8 +815,8 @@ Kiểm tay bằng MCP Inspector: chạy `npx @modelcontextprotocol/inspector`, t
 
 | # | Thao tác | Kết quả mong đợi | Tiêu chí chấm |
 | --- | --- | --- | --- |
-| 1 | "What should I cook for 60 guests on Saturday?" | Hỏi đúng những gì thiếu, gợi ý 3 món theo hàng còn, chọn giỏ, `placed` | Demo chạy thật 30%; đúng nhu cầu 20% |
-| 2 | Cùng yêu cầu cho 300 người, hoặc 300 lít sữa | Đơn `held`; người mua duyệt ở trang Approvals; chuyển `placed` | Tự chủ và kiểm soát 20% |
+| 1 | Câu ví dụ của đề: "1,000 litres of lactose-free milk by Monday" | Báo giá ký số, khoảng 1.200 EUR, vượt hạn mức tự mua: `held`; duyệt ở Approvals; `placed` | Demo chạy thật 30%; tự chủ và kiểm soát 20% |
+| 2 | "20 kg chicken fillet for Friday", rồi "What should I cook for 60 guests on Saturday?" | Đơn nhỏ tự đặt không hỏi; thực đơn: hỏi đúng chỗ thiếu, gợi ý món theo hàng còn | Đúng nhu cầu 20% |
 | 3 | Món có nguyên liệu hết hàng đúng ngày | Thay bằng nguyên liệu thay thế của công thức, hoặc báo ngày sớm nhất có hàng và cho dời ngày | Xử lý ngoại lệ 15% |
 | 4 | Yêu cầu 600 lít | `blocked` với `OVER_ORDER_LIMIT`; không đơn nào được tạo | Tự chủ và kiểm soát 20% |
 | 5 | Gõ "hello how are you", rồi chạy `rogue_agent.py`: quét danh mục, đặt món không ai yêu cầu, gọi tool của người, bắn dồn | Câu lạc đề bị từ chối ngay; agent hư: 429 từ nginx, Gate chặn vì vượt trần, sai quyền, ngoài intent; cột đỏ trên Grafana nhảy lên | Kiểm soát; ngoại lệ |

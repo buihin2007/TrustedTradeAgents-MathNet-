@@ -14,7 +14,9 @@ A login app for a buyer (F&B manager) on top of Valio Aimo's MCP gateway.
   3. Menus: `brain.recipes` (started while the buyer answers) gives dishes with per-person amounts and recipe alternatives; each dish is checked against Valio stock for the delivery date.
   4. Sourcing: `register_intent` (user JWT) -> `search_products_batch` -> `get_price_availability` (agent key). Three gateway calls per request.
   5. `sourcing.py` builds the baskets (best match, cheapest, most reliable): other product, then recipe alternative, then partial fill with the earliest available date.
-  6. The buyer picks a basket -> `place_order` -> the gateway decides placed / held / blocked.
+  6. Best basket complete, under the auto limit, no substitutes -> the agent orders without asking (`AGENT_AUTO_ORDER=0` turns this off). Otherwise the buyer picks a basket -> `place_order` -> the gateway decides placed / held / blocked.
+  - Short stock: split across products of the same ingredient, then Valio substitute pairs (`get_substitutes`, lines carry `substitute_for`, the gateway holds them), then the recipe alternative, then a partial fill.
+  - Quotes are signed (Ed25519, `/.well-known/jwks.json`, `tta_contracts.quote_signing_bytes`, valid 15 min); `app/trust.py` verifies them. An order on an expired quote is held (`PRICE_MOVED`). External agents: `docs/AGENT_INTEGRATION.md`.
 - Files: `app/agent.py` (flow and questions), `brain.py` (OpenRouter: Jev, plan, recipes), `sourcing.py` (pure code), `clarify.py` (date and quantity parsers), `live.py` (in-memory snapshots).
 - The agent pushes every step to the browser over `GET /api/requests/{id}/stream` (SSE, whole-snapshot events; the web falls back to polling). State lives in `buyer.requests.parsed` as `{"v": 2, "plan", "feed", "baskets", ...}`; `feed` holds steps, questions, dish cards and baskets. The snapshot store is per process: run one `api` replica.
 - Every agent tool call passes the Gate in `mcp`: identity, mandate, caps, order policy. Outcomes: placed / held / blocked. Per-call Jev in the gate is opt-in (`GATEWAY_JEV=1`).
@@ -50,7 +52,7 @@ Only edit your own folders. Need a change elsewhere: ask its owner.
 - Ports: web 3000, api 8000, mcp 9000. Only nginx is published (8080).
 - `api` exposes public routes under `/api/...`. `mcp` serves MCP at `/mcp` (no trailing slash).
 - `api` calls the gateway at `MCP_URL=http://nginx/mcp`, never `mcp:9000`, so rate limits apply.
-- Database: migrations `0001_init.sql`, `0002_audit_dashboard.sql`, `0003_import_fixes.sql` (run in order, before the import), `0004_vector_index.sql` (HNSW, after the import), demo data `supabase/seed.sql`, fake gateway traffic `scripts/demo/fake_gateway_events.sql`.
+- Database: migrations `0001_init.sql`, `0002_audit_dashboard.sql`, `0003_import_fixes.sql` (run in order, before the import), `0004_vector_index.sql` (HNSW, after the import), `0005_demo_mandate.sql` (demo limits auto 300 / order 3000 / week 10000 EUR on older installs; the seed already has them), demo data `supabase/seed.sql`, fake gateway traffic `scripts/demo/fake_gateway_events.sql`.
 - The agent key must start with `tta_`: the gate routes any other Bearer token to user-JWT verification (-> `FORBIDDEN`).
 - Models: embeddings `baai/bge-m3` = `vector(1024)` (same model at import and at query time, `EMBED_DIMS=1024`); LLM `LLM_FAST_MODEL` or `LLM_MODEL` (`deepseek/deepseek-v4.1-flash`), then `LLM_MODEL_FALLBACK` (`anthropic/claude-haiku-5.5`). The agent asks for `response_format: json_object`, retries without optional parameters on HTTP 400, and cleans every field in code (`brain.to_plan`, `brain.to_dishes`): unknown codes and impossible numbers are dropped.
 - Valio availability: a schedule line applies from its date onwards (latest line on or before the delivery day); UTC timestamps are read as Helsinki days; a passed `closingTime` gives `sales_block="cutoff"`.

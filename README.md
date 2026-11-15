@@ -22,7 +22,8 @@ flowchart LR
 | --- | --- |
 | Buyer app | http://localhost:8080 |
 | Valio Aimo audit dashboard (Grafana) | http://localhost:3001 |
-| MCP gateway | http://localhost:8080/mcp |
+| MCP gateway | http://localhost:8080/mcp (see `docs/AGENT_INTEGRATION.md`) |
+| Quote signing key | http://localhost:8080/.well-known/jwks.json |
 
 ## How a request runs
 
@@ -31,7 +32,8 @@ flowchart LR
 3. **Menus.** No dish named: the LLM suggests three, each checked against Valio Aimo's stock for the delivery day (coverage and cost per person shown). Recipes are computed while the buyer is still answering.
 4. **Source.** The intent is signed with the buyer's own JWT (`register_intent`). The agent then makes one batched catalog search (`search_products_batch`) and one price and stock call (`get_price_availability`).
 5. **Baskets in code.** Best match, cheapest, most reliable. Out of stock: another product, then the recipe's own alternative, then a partial fill with the earliest date it is available.
-6. **The buyer picks a basket, the gateway decides.** Within the auto limit: `placed`; above it: `held` until approved on the Approvals page; above the order limit or outside the mandate: `blocked`.
+6. **Order within authority, ask otherwise.** A complete basket under the auto limit with no substitutes is ordered without asking (`AGENT_AUTO_ORDER=0` always asks). Otherwise the buyer picks a basket and the gateway decides: above the auto limit or with a substitute it is `held` until approved on the Approvals page; above the order limit or outside the mandate it is `blocked`.
+7. **Trust.** Every quote is signed by Valio Aimo (Ed25519, public key at `/.well-known/jwks.json`) and valid for 15 minutes; the agent verifies it before using prices and stock. When stock is short the agent splits across several products, then uses Valio Aimo's own substitute pairs (always held for approval), then the recipe's alternative.
 
 Every step streams to the browser as it happens (server-sent events).
 
@@ -61,6 +63,7 @@ In the Supabase dashboard, **SQL Editor**, run these files in order:
 1. `supabase/migrations/0001_init.sql`
 2. `supabase/migrations/0002_audit_dashboard.sql`
 3. `supabase/migrations/0003_import_fixes.sql`
+4. `supabase/migrations/0005_demo_mandate.sql` (only on a project seeded before 15 Nov: raises the demo limits)
 
 Then **Authentication → Users → Add user**: create the demo buyer (e.g. `manager@demo-hotel.example`, tick *Auto confirm*) and copy its UUID.
 
@@ -153,7 +156,8 @@ After changing a `NEXT_PUBLIC_*` value: `docker compose up -d --build web`. Afte
 
 | Message | What happens |
 | --- | --- |
-| `20 kg chicken fillet for Friday` | Baskets straight away; pick one, placed within the auto limit |
+| `I need 1,000 litres of lactose-free milk by Monday` | The challenge's example: about 1,200 EUR, above the 300 EUR auto limit, so it is held; approve it on the Approvals page |
+| `20 kg chicken fillet for Friday` | Under the auto limit and complete: ordered without asking |
 | `Lunch for 80 people next Tuesday, nut-free` | Three dish suggestions checked against stock, nut allergens excluded at the gateway |
 | `What should I cook for 100 guests on Saturday?` | Asks nothing it already knows, suggests dishes, "Suggest other dishes" if items are missing |
 | `Salmon soup for 400` | The basket exceeds the 600 EUR order limit: the gateway blocks it |
@@ -165,6 +169,7 @@ Demo scripts:
 python scripts/rogue_agent.py      # a misbehaving agent: scraping, unrequested items, user-only tools, bursts. Expect 5/5 STOPPED
 python scripts/diagnose.py         # why was the last request blocked or slow (gateway events with latency)
 python scripts/valio_probe.py 2026-11-20 400104   # raw Valio price and availability answer
+python scripts/demo/record_demo.py --rogue --grafana   # records the whole demo as a video (pip install playwright)
 ```
 
 Fill the Grafana dashboard with sample traffic: run `scripts/demo/fake_gateway_events.sql` in the SQL Editor.
@@ -200,6 +205,7 @@ cd apps/web && npm ci && npx tsc --noEmit && npm run build
 | `supabase` | Migrations and seed |
 | `infra` | nginx and Grafana |
 | `scripts` | Import, environment check, diagnosis, demo agents |
+| `docs/AGENT_INTEGRATION.md` | How any external MCP agent buys through the gateway: identities, flow, signed quotes, reason codes, limits |
 | `docs/PLAN.md` | Full plan (Vietnamese) |
 | `CLAUDE.md` | Rules for anyone (human or AI) changing the code |
 

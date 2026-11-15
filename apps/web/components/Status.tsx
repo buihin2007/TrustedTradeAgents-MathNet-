@@ -16,7 +16,7 @@ const CLASS: Record<Tone, string> = {
 export function Status({ value }: { value: RequestStatus | AuditDecision | string }) {
   const tone = TONE[value] ?? "neutral";
   return (
-    <span className={`inline-block rounded-full border px-2 py-0.5 text-xs font-medium ${CLASS[tone]}`}>
+    <span data-status={value} className={`inline-block rounded-full border px-2 py-0.5 text-xs font-medium ${CLASS[tone]}`}>
       {value.replaceAll("_", " ")}
     </span>
   );

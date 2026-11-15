@@ -81,11 +81,13 @@ export interface DishesItem { t: "dishes"; dishes: DishCard[]; headcount: number
 export interface BasketLine {
   product_id: number; name: string; units: number; sales_unit: string; pack: string; unit_price: string;
   line_total: string; need: string; amount: string; note: string; reliability: number | null; dishes: string[];
+  substitute_for: number | null; co2_kg: number | null; origin: string | null;
 }
 export interface Basket {
   label: OptionLabel; title: string; total: string; lines: BasketLine[];
   missing: { need: string; essential: boolean; reason: string; earliest: string | null }[];
   gate: "auto" | "approval" | "blocked" | "unknown"; gate_note: string; explanation: string;
+  co2_kg: number | null; reliability: number | null;
 }
 export interface BasketsItem { t: "baskets"; baskets: Basket[]; pantry: string[]; date: string }
 export type FeedItem = StepItem | AskItem | SayItem | DishesItem | BasketsItem;

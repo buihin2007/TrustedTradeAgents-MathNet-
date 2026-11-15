@@ -76,7 +76,7 @@ export function Question({ q, busy, onAnswer }: { q: AskItem; busy: boolean; onA
   }
   const toggle = (value: string) => setPicked(picked.includes(value) ? picked.filter((v) => v !== value) : [...picked, value]);
   return (
-    <div className="rounded-xl border border-human/40 bg-white p-4 shadow-sm">
+    <div data-testid="question" data-field={q.field} className="rounded-xl border border-human/40 bg-white p-4 shadow-sm">
       <div className="mb-2 flex items-center gap-2">
         <span className="rounded-full bg-human/10 px-2 py-0.5 text-xs font-medium text-human">{q.header}</span>
         {q.multi && <span className="text-xs text-neutral-500">Select all that apply</span>}
@@ -86,7 +86,7 @@ export function Question({ q, busy, onAnswer }: { q: AskItem; busy: boolean; onA
         {q.options.map((o) => {
           const on = picked.includes(o.value);
           return (
-            <button key={o.value} type="button" disabled={busy}
+            <button key={o.value} type="button" disabled={busy} data-testid="option" data-value={o.value}
               onClick={() => (q.multi ? toggle(o.value) : onAnswer(q, [o.value], ""))}
               className={`flex w-full items-start gap-3 rounded-lg border px-3 py-2 text-left text-sm transition hover:border-human/60 hover:bg-human/5 disabled:opacity-60 ${on ? "border-human bg-human/5" : "border-neutral-200"}`}>
               {q.multi && (
@@ -105,7 +105,7 @@ export function Question({ q, busy, onAnswer }: { q: AskItem; busy: boolean; onA
       <form className="mt-3 flex gap-2" onSubmit={(e) => { e.preventDefault(); if (other.trim() || picked.length) onAnswer(q, picked, other.trim()); }}>
         <input className="min-w-0 flex-1 rounded-lg border border-neutral-300 px-3 py-2 text-sm" maxLength={500} disabled={busy}
           placeholder={q.hint || "Something else"} value={other} onChange={(e) => setOther(e.target.value)} />
-        <button disabled={busy || (!other.trim() && !picked.length)} className="rounded-lg bg-human px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
+        <button data-testid="send" disabled={busy || (!other.trim() && !picked.length)} className="rounded-lg bg-human px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
           {busy ? "Sending" : q.multi && picked.length && !other.trim() ? `Confirm ${picked.length}` : "Send"}
         </button>
       </form>
@@ -172,14 +172,27 @@ export function Baskets({ item, chosen }: { item: BasketsItem; chosen?: number |
               <h3 className="font-semibold">{b.title}</h3>
               <span className="text-lg font-semibold tabular-nums">{eur(b.total)}</span>
             </div>
-            <span className={`mt-1 inline-block rounded-full border px-2 py-0.5 text-xs ${GATE[b.gate]}`}>{b.gate_note}</span>
+            <div className="mt-1 flex flex-wrap gap-1.5 text-xs">
+              <span className={`rounded-full border px-2 py-0.5 ${GATE[b.gate]}`}>{b.gate_note}</span>
+              {b.reliability != null && (
+                <span className="rounded-full border border-neutral-200 bg-neutral-50 px-2 py-0.5">
+                  {Math.round(b.reliability * 100)}% delivery reliability
+                </span>
+              )}
+              {b.co2_kg != null && (
+                <span className="rounded-full border border-neutral-200 bg-neutral-50 px-2 py-0.5" title="Category-level average from Valio Aimo data">
+                  ≈ {b.co2_kg.toLocaleString("en-GB")} kg CO₂e
+                </span>
+              )}
+            </div>
             <ul className="mt-3 divide-y divide-neutral-100">
               {b.lines.map((l, n) => (
                 <li key={`${l.product_id}-${n}`} className="py-1.5">
                   <div className="flex justify-between gap-3">
                     <span>
                       <span className="tabular-nums">{l.units}</span> × {l.name}
-                      <span className="text-neutral-400"> ({l.pack} each)</span>
+                      <span className="text-neutral-400"> ({l.pack} each{l.origin ? `, ${l.origin}` : ""})</span>
+                      {l.substitute_for != null && <span className="ml-1 rounded bg-human/10 px-1 text-xs text-human">Valio substitute</span>}
                     </span>
                     <span className="shrink-0 tabular-nums text-neutral-600">{eur(l.line_total)}</span>
                   </div>
