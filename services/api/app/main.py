@@ -34,7 +34,9 @@ def create_app(settings: Settings | None = None, *, store=None, gateway=None, ll
                 app.state.store = owned_store
             app.state.gateway = gateway or Gateway(config)
             app.state.llm = llm or OpenRouter(config, client, tracer_instance=tracer)
-            app.state.pipeline = Pipeline(app.state.store, app.state.gateway, app.state.llm, tracer_instance=tracer)
+            app.state.pipeline = Pipeline(
+                app.state.store, app.state.gateway, app.state.llm, tracer_instance=tracer, today=config.today
+            )
             try:
                 yield
             finally:

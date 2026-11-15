@@ -1,6 +1,7 @@
 """Fixed buyer workflow. The LLM never selects tools or authorizes a purchase."""
 
 import asyncio
+from datetime import date
 from uuid import UUID
 
 from opentelemetry import trace
@@ -18,6 +19,7 @@ from tta_contracts import (
     SearchResult,
 )
 
+from .clarify import MAX_ASKS, fill_missing, next_question
 from .gateway import GatewayDenied, GatewayUnavailable
 from .llm import LLMUnavailable
 from .options import build_options
@@ -29,7 +31,8 @@ tracer = trace.get_tracer("tta.api")
 
 
 class Pipeline:
-    def __init__(self, store, gateway, llm, tracer_instance=None):
+    def __init__(self, store, gateway, llm, tracer_instance=None, today=None):
+        self.today = today or date.today   # buyer-local date in production (Settings.today)
         self.store = store
         self.gateway = gateway
         self.llm = llm
@@ -135,17 +138,26 @@ class Pipeline:
                         {"question": q.question, "answer": q.answer} for q in request.questions if q.answer is not None
                     ]
                     parsed = await self.llm.parse(request.text, answers, facets)
+                    # The LLM may drop fields the buyer already gave; fill them in by code.
+                    parsed = fill_missing(parsed, request.parsed, request.questions, self.today())
                     await self.store.update_request(
                         profile,
                         request_id,
                         parsed=parsed.model_dump(mode="json"),
                     )
                     await event("request.parsed", "Purchasing request parsed")
-                    missing = [
-                        name for name in ("quantity", "quantity_unit", "delivery_date") if getattr(parsed, name) is None
-                    ]
-                    if missing:
-                        await ask("Please provide: " + ", ".join(missing), ["Enter the missing details"])
+                    try:
+                        pending = next_question(parsed, request.questions, self.today())
+                    except ValueError as exc:
+                        field = exc.args[0].replace("_", " ")
+                        await fail(
+                            f"Could not read the {field} after {MAX_ASKS} answers. Create a new request that "
+                            "includes it, e.g. '20 kg chicken fillet for 2026-11-24'."
+                        )
+                        return
+                    if pending:
+                        _, question, choices = pending
+                        await ask(question, choices)
                         return
                     await step("registering_intent")
                     registration = RegisterIntentRequest(
