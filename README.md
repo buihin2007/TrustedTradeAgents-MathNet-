@@ -70,10 +70,10 @@ python scripts/demo/record_demo.py --rogue --grafana   # records the whole demo 
 
 ## See the traces in Langfuse
 
-Every request is recorded in the team's Langfuse project, if `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are in `.env`. Ask the team to invite your email to the project.
+Every request is recorded in the team's Langfuse project: the one the `LANGFUSE_*` keys in the shared `.env` belong to (owner: Triet). To see it, ask the owner to invite your email under the project's Settings → Members (role Member; Viewer for read-only). Then sign in at https://cloud.langfuse.com and pick the project in the top bar.
 
 1. Send a request in the buyer app. Copy its id: the UUID at the end of the address, `/requests/<id>`.
-2. Sign in at https://cloud.langfuse.com and open the team's project.
+2. Sign in at https://cloud.langfuse.com and pick the team's project in the top bar.
 3. Left menu **Tracing → Sessions**. Search the id and open the session: one session is one request.
 4. The session lists one trace per turn, oldest first:
 
