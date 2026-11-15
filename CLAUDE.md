@@ -1,6 +1,6 @@
 # Trusted Trade Agents (Junction 2026, Valio Aimo track)
 
-Read this file before writing any code. Install: `README.md`. Full plan: `docs/PLAN.md` (live version: https://claude.ai/artifact/BUTtVyQLjNt5hKhqRmXBZg).
+Read this file before writing any code. Install and run: `README.md` (new Supabase project: `docs/SETUP_FROM_SCRATCH.md`). Architecture, request logic and the challenge requirements mapped to features, with open work: `docs/ARCHITECTURE.md`. Full plan: `docs/PLAN.md` (live version: https://claude.ai/artifact/BUTtVyQLjNt5hKhqRmXBZg).
 
 ## What we build
 
@@ -12,7 +12,7 @@ A login app for a buyer (F&B manager) on top of Valio Aimo's MCP gateway.
   1. Jev screens the first message while one LLM call (`brain.plan`) turns it into a `Plan` (products or menu, people, date, allergens, diet). Off topic -> `rejected`, no gateway call.
   2. Code asks one multiple-choice question at a time (people, date, quantity, dishes, basket), with a free-text field. Typed dates and quantities are parsed in code (`clarify.py`); other free text goes back through `brain.plan`.
   3. Menus: `brain.recipes` (started while the buyer answers) gives dishes with per-person amounts and recipe alternatives; each dish is checked against Valio stock for the delivery date.
-  4. Sourcing: `register_intent` (user JWT) -> `search_products_batch` -> `get_price_availability` (agent key). Three gateway calls per request.
+  4. Sourcing: `register_intent` (user JWT) -> `search_products_batch` -> `get_price_availability` (agent key); `get_substitutes` and a second quote only when stock is short.
   5. `sourcing.py` builds the baskets (best match, cheapest, most reliable): other product, then recipe alternative, then partial fill with the earliest available date.
   6. Best basket complete, under the auto limit, no substitutes -> the agent orders without asking (`AGENT_AUTO_ORDER=0` turns this off). Otherwise the buyer picks a basket -> `place_order` -> the gateway decides placed / held / blocked.
   - Short stock: split across products of the same ingredient, then Valio substitute pairs (`get_substitutes`, lines carry `substitute_for`, the gateway holds them), then the recipe alternative, then a partial fill.
