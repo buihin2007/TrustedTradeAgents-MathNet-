@@ -1,6 +1,7 @@
 """Project JWT verification and organization-scoped gateway identities."""
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import Literal
@@ -13,6 +14,12 @@ from tta_contracts import ReasonCode as Reason
 
 from .db import all_rows, one
 
+logger = logging.getLogger(__name__)
+# A slow or briefly unreachable Supabase must not look like bad credentials: wait longer, try twice,
+# and keep known signing keys so a verified buyer is not re-checked over the network every few minutes.
+NETWORK_TIMEOUT = 5
+NETWORK_ERRORS = (jwt.PyJWKClientConnectionError, httpx.TransportError)
+
 
 class SupabaseJWT:
     def __init__(self, url: str, publishable_key: str, http: httpx.AsyncClient):
@@ -22,46 +29,57 @@ class SupabaseJWT:
         self.jwks = (
             jwt.PyJWKClient(
                 f"{self.issuer}/.well-known/jwks.json",
-                timeout=2,
-                lifespan=300,
+                timeout=NETWORK_TIMEOUT,
+                lifespan=3600,
+                cache_keys=True,
             )
             if self.issuer
             else None
         )
 
     async def user_id(self, token: str) -> UUID:
-        try:
-            if self.jwks is None:
-                raise ValueError("Supabase is not configured")
-            algorithm = jwt.get_unverified_header(token).get("alg")
-            if algorithm in {"RS256", "ES256"}:
-                key = await asyncio.to_thread(self.jwks.get_signing_key_from_jwt, token)
-                claims = jwt.decode(
-                    token,
-                    key.key,
-                    algorithms=[algorithm],
-                    issuer=self.issuer,
-                    audience="authenticated",
-                    options={"require": ["exp", "sub"]},
-                )
-                if claims.get("role") != "authenticated" or claims.get("is_anonymous", False):
-                    raise ValueError("Invalid user role")
-                return UUID(claims["sub"])
-            if algorithm == "HS256" and self.key:
-                # Legacy projects expose no symmetric key in JWKS. Supabase Auth verifies it.
-                response = await self.http.get(
-                    f"{self.issuer}/user",
-                    headers={"Authorization": f"Bearer {token}", "apikey": self.key},
-                    timeout=2,
-                )
-                response.raise_for_status()
-                user = response.json()
-                if user.get("role") != "authenticated" or user.get("is_anonymous", False):
-                    raise ValueError("Invalid user role")
-                return UUID(user["id"])
-        except (jwt.PyJWTError, httpx.HTTPError, ValueError, TypeError, KeyError, AttributeError):
-            pass
+        for attempt in (1, 2):
+            try:
+                return await self._user_id(token)
+            except NETWORK_ERRORS as exc:
+                logger.warning("Supabase unreachable verifying a buyer (try %s): %s", attempt, type(exc).__name__)
+            except (jwt.PyJWTError, httpx.HTTPError, ValueError, TypeError, KeyError, AttributeError) as exc:
+                logger.info("Buyer token rejected: %s", type(exc).__name__)
+                break
         raise ToolError(Reason.FORBIDDEN)
+
+    async def _user_id(self, token: str) -> UUID:
+        if self.jwks is None:
+            raise ValueError("Supabase is not configured")
+        algorithm = jwt.get_unverified_header(token).get("alg")
+        if algorithm in {"RS256", "ES256"}:
+            key = await asyncio.to_thread(self.jwks.get_signing_key_from_jwt, token)
+            claims = jwt.decode(
+                token,
+                key.key,
+                algorithms=[algorithm],
+                issuer=self.issuer,
+                audience="authenticated",
+                options={"require": ["exp", "sub"]},
+            )
+            if claims.get("role") != "authenticated" or claims.get("is_anonymous", False):
+                raise ValueError("Invalid user role")
+            return UUID(claims["sub"])
+        if algorithm == "HS256" and self.key:
+            # Legacy projects expose no symmetric key in JWKS. Supabase Auth verifies it.
+            response = await self.http.get(
+                f"{self.issuer}/user",
+                headers={"Authorization": f"Bearer {token}", "apikey": self.key},
+                timeout=NETWORK_TIMEOUT,
+            )
+            if response.status_code >= 500:
+                raise httpx.TransportError(f"Supabase Auth returned {response.status_code}")
+            response.raise_for_status()
+            user = response.json()
+            if user.get("role") != "authenticated" or user.get("is_anonymous", False):
+                raise ValueError("Invalid user role")
+            return UUID(user["id"])
+        raise ValueError(f"Unsupported token algorithm {algorithm}")
 
 
 @dataclass(frozen=True)
