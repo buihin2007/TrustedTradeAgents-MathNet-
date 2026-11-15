@@ -43,8 +43,8 @@
     {
       "id": 1,
       "type": "stat",
-      "title": "EUR đặt tự động hoặc đã duyệt",
-      "description": "Tổng tiền các đơn placed trong khoảng thời gian đang chọn.",
+      "title": "EUR placed automatically or approved",
+      "description": "Total of placed orders in the selected time range.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "tta-pg"
@@ -94,8 +94,8 @@
     {
       "id": 2,
       "type": "stat",
-      "title": "Đơn đang chờ người duyệt",
-      "description": "Đơn held ngay lúc này, không phụ thuộc khoảng thời gian.",
+      "title": "Orders waiting for a person",
+      "description": "Orders held right now, whatever the time range.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "tta-pg"
@@ -145,7 +145,7 @@
     {
       "id": 3,
       "type": "stat",
-      "title": "Lời gọi bị chặn",
+      "title": "Calls blocked",
       "description": "",
       "datasource": {
         "type": "grafana-postgresql-datasource",
@@ -196,8 +196,8 @@
     {
       "id": 4,
       "type": "stat",
-      "title": "Tỉ lệ không cho qua",
-      "description": "Phần trăm lời gọi bị chặn hoặc phải hỏi người.",
+      "title": "Share not allowed through",
+      "description": "Percentage of calls blocked or sent to a person.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "tta-pg"
@@ -247,7 +247,7 @@
     {
       "id": 5,
       "type": "timeseries",
-      "title": "Lời gọi tool theo phút, theo quyết định của Gate",
+      "title": "Tool calls per minute, by Gate decision",
       "description": "",
       "datasource": {
         "type": "grafana-postgresql-datasource",
@@ -334,7 +334,7 @@
     {
       "id": 6,
       "type": "barchart",
-      "title": "Mã lý do nhiều nhất",
+      "title": "Top reason codes",
       "description": "",
       "datasource": {
         "type": "grafana-postgresql-datasource",
@@ -371,7 +371,7 @@
     {
       "id": 7,
       "type": "table",
-      "title": "Đơn hàng: ai duyệt, bao nhiêu tiền, mất bao lâu",
+      "title": "Orders: who decided, how much, how long it took",
       "description": "",
       "datasource": {
         "type": "grafana-postgresql-datasource",
@@ -393,7 +393,7 @@
           "editorMode": "code",
           "rawQuery": true,
           "format": "table",
-          "rawSql": "select created_at as \"Lúc tạo\", status as \"Trạng thái\", agent_name as \"Agent\", amount_eur as \"EUR\", array_to_string(reasons, ', ') as \"Lý do\", option_count as \"Phương án\", decided_by::text as \"Người duyệt\", seconds_to_decision as \"Giây tới khi duyệt\", trace_id as \"Trace\" from wholesaler.v_audit_orders where $__timeFilter(created_at) and ('${intent}' = '' or intent_id::text = '${intent}') order by created_at desc limit 100"
+          "rawSql": "select created_at as \"Created\", status as \"Status\", agent_name as \"Agent\", amount_eur as \"EUR\", array_to_string(reasons, ', ') as \"Reasons\", option_count as \"Options\", decided_by::text as \"Decided by\", seconds_to_decision as \"Seconds to decision\", trace_id as \"Trace\" from wholesaler.v_audit_orders where $__timeFilter(created_at) and ('${intent}' = '' or intent_id::text = '${intent}') order by created_at desc limit 100"
         }
       ],
       "fieldConfig": {
@@ -402,7 +402,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Trạng thái"
+              "options": "Status"
             },
             "properties": [
               {
@@ -461,7 +461,7 @@
                 "id": "links",
                 "value": [
                   {
-                    "title": "Mở trace trong Langfuse",
+                    "title": "Open trace in Langfuse",
                     "url": "${langfuse_project_url}/traces/${__value.raw}",
                     "targetBlank": true
                   }
@@ -487,7 +487,7 @@
     {
       "id": 8,
       "type": "table",
-      "title": "Agent và mandate đang hiệu lực",
+      "title": "Agents and their current mandate",
       "description": "",
       "datasource": {
         "type": "grafana-postgresql-datasource",
@@ -509,7 +509,7 @@
           "editorMode": "code",
           "rawQuery": true,
           "format": "table",
-          "rawSql": "select name as \"Agent\", status as \"Trạng thái\", mandate_version as \"Mandate v\", auto_limit_eur as \"Tự mua ≤ EUR\", order_limit_eur as \"Một đơn ≤ EUR\", weekly_budget_eur as \"Tuần ≤ EUR\", signed_at as \"Ký lúc\" from wholesaler.v_audit_agents order by name"
+          "rawSql": "select name as \"Agent\", status as \"Status\", mandate_version as \"Mandate v\", auto_limit_eur as \"Buys alone ≤ EUR\", order_limit_eur as \"Per order ≤ EUR\", weekly_budget_eur as \"Per week ≤ EUR\", signed_at as \"Signed\" from wholesaler.v_audit_agents order by name"
         }
       ],
       "fieldConfig": {
@@ -518,7 +518,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Trạng thái"
+              "options": "Status"
             },
             "properties": [
               {
@@ -553,7 +553,7 @@
     {
       "id": 9,
       "type": "table",
-      "title": "Intent chạm nhiều sản phẩm nhất (trần 200)",
+      "title": "Intents touching the most products (cap 200)",
       "description": "",
       "datasource": {
         "type": "grafana-postgresql-datasource",
@@ -575,7 +575,7 @@
           "editorMode": "code",
           "rawQuery": true,
           "format": "table",
-          "rawSql": "select intent_id::text as \"Intent\", request_text as \"Yêu cầu\", distinct_products as \"Sản phẩm đã chạm\", created_at as \"Tạo lúc\" from wholesaler.v_audit_intents where $__timeFilter(created_at) order by distinct_products desc limit 20"
+          "rawSql": "select intent_id::text as \"Intent\", request_text as \"Request\", distinct_products as \"Products touched\", created_at as \"Created\" from wholesaler.v_audit_intents where $__timeFilter(created_at) order by distinct_products desc limit 20"
         }
       ],
       "fieldConfig": {
@@ -584,7 +584,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Sản phẩm đã chạm"
+              "options": "Products touched"
             },
             "properties": [
               {
@@ -621,8 +621,8 @@
     {
       "id": 10,
       "type": "table",
-      "title": "Nhật ký cổng: mỗi tool call một dòng",
-      "description": "Lọc theo Intent ở ô trên cùng. Bấm Trace để mở Langfuse.",
+      "title": "Gateway log: one row per tool call",
+      "description": "Filter by Intent in the box at the top. Click Trace to open Langfuse.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "tta-pg"
@@ -643,7 +643,7 @@
           "editorMode": "code",
           "rawQuery": true,
           "format": "table",
-          "rawSql": "select ts as \"Lúc\", agent_name as \"Agent\", tool as \"Tool\", decision as \"Quyết định\", array_to_string(reasons, ', ') as \"Lý do\", round(jev_min::numeric, 2) as \"Jev thấp nhất\", row_count as \"Số dòng\", latency_ms as \"ms\", intent_id::text as \"Intent\", trace_id as \"Trace\" from wholesaler.v_audit_gateway where $__timeFilter(ts) and ('${intent}' = '' or intent_id::text = '${intent}') order by ts desc limit 500"
+          "rawSql": "select ts as \"Time\", agent_name as \"Agent\", tool as \"Tool\", decision as \"Decision\", array_to_string(reasons, ', ') as \"Reasons\", round(jev_min::numeric, 2) as \"Lowest Jev\", row_count as \"Rows\", latency_ms as \"ms\", intent_id::text as \"Intent\", trace_id as \"Trace\" from wholesaler.v_audit_gateway where $__timeFilter(ts) and ('${intent}' = '' or intent_id::text = '${intent}') order by ts desc limit 500"
         }
       ],
       "fieldConfig": {
@@ -652,7 +652,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Quyết định"
+              "options": "Decision"
             },
             "properties": [
               {
@@ -711,7 +711,7 @@
                 "id": "links",
                 "value": [
                   {
-                    "title": "Mở trace trong Langfuse",
+                    "title": "Open trace in Langfuse",
                     "url": "${langfuse_project_url}/traces/${__value.raw}",
                     "targetBlank": true
                   }
