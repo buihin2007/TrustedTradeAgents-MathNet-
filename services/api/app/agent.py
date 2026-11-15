@@ -112,6 +112,31 @@ def date_options(today: date) -> list[dict]:
     return options
 
 
+def stock_dates(offers, today: date, skip: date, limit: int = 4) -> list[dict]:
+    """Delivery days on which Valio Aimo's schedule shows stock, so every date offered can be filled.
+
+    A schedule line gives the amount available from its date on; the latest line on or before a day applies.
+    """
+    priced = [offer for offer in offers if offer.schedule]
+    options, day = [], today
+    while len(options) < limit and day < today + timedelta(days=28):
+        day += timedelta(days=1)
+        if day == skip or day.weekday() == 6:
+            continue
+        stocked = 0
+        for offer in priced:
+            past = [x for x in offer.schedule if x.available_date <= day]
+            line = max(past, key=lambda x: x.available_date, default=None)
+            stocked += bool(line and line.sales_block is None and line.available_amount > 0)
+        if stocked:
+            options.append({
+                "value": day.isoformat(),
+                "label": fmt_day(day, today),
+                "desc": f"{stocked} of {len(priced)} products in stock that day",
+            })
+    return options
+
+
 def slot_question(plan: Plan, today: date) -> dict | None:
     """The next thing the buyer has to tell us, as one multiple-choice question."""
     if plan.kind == "menu" and plan.headcount is None:
@@ -628,13 +653,19 @@ class Agent:
             plan.delivery_date = None
             state["plan"] = plan.model_dump(mode="json")
             self.reset_sourcing(run)
+            question = slot_question(plan, today)
+            dates = stock_dates(offers, today, day)
+            if dates:
+                question["options"] = dates
+                question["text"] = "These days have stock at Valio Aimo. Which one should it be delivered?"
             run.say(
                 f"Valio Aimo reports no stock for any of these products on {fmt_day(day, today)}"
                 + (" because the order cut-off has passed." if cutoff else ".")
-                + " Pick another delivery date.",
+                + (" The dates below are the ones its stock schedule can fill." if dates
+                   else " Its stock schedule shows nothing in the next four weeks; try another date or product."),
                 "warn",
             )
-            await self.ask(run, **slot_question(plan, today))
+            await self.ask(run, **question)
             return
         if menu is not None and menu.get("selected") is None:
             cards = dish_cards(dishes, plan.headcount, sourced["chosen"], sourced["offers"], day, sourced["dairy"])

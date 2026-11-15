@@ -7,6 +7,7 @@ import httpx
 from app.valio import ValioClient, parse_offer
 
 DAY = date(2099, 1, 1)
+LATE = datetime(2098, 12, 31, 12, tzinfo=UTC)  # after the cut-off the day before DAY
 PRICE = {
     "productId": "1",
     "error": False,
@@ -62,7 +63,7 @@ async def test_valio_batches_and_normalizes():
 def test_past_cutoff_and_wrong_date_are_unavailable():
     now = datetime(2098, 1, 1, tzinfo=UTC)
     assert (
-        parse_offer(1, DAY, PRICE, {**STOCK, "closingTime": "2097-01-01"}, now).available_on_date
+        parse_offer(1, DAY, PRICE, {**STOCK, "closingTime": "2098-12-31T10:00:00"}, LATE).available_on_date
         == 0
     )
     assert parse_offer(1, date(2098, 12, 31), PRICE, STOCK, now).available_on_date == 0
@@ -78,5 +79,11 @@ def test_schedule_line_applies_from_its_date_and_utc_midnight_is_local():
     stock = {**STOCK, "scheduleLines": lines}
     assert parse_offer(1, date(2099, 1, 1), PRICE, stock, now).available_on_date == 5
     assert parse_offer(1, date(2099, 1, 4), PRICE, stock, now).available_on_date == 90
-    late = parse_offer(1, DAY, PRICE, {**STOCK, "closingTime": "2097-01-01"}, now)
+    late = parse_offer(1, DAY, PRICE, {**STOCK, "closingTime": "2098-12-31T10:00:00"}, LATE)
     assert late.sales_block == "cutoff" and late.available_on_date == 0
+
+
+def test_a_closing_time_long_before_the_delivery_day_does_not_block_it():
+    now = datetime(2098, 1, 1, tzinfo=UTC)
+    offer = parse_offer(1, DAY, PRICE, {**STOCK, "closingTime": "2097-01-01"}, now)
+    assert offer.sales_block is None and offer.available_on_date == 40

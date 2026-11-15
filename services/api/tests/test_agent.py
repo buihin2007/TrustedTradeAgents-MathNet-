@@ -291,3 +291,26 @@ async def test_suggest_other_dishes_avoids_what_was_missing():
     assert llm.recipe_calls[-1]["exclude"] == ["Salmon soup"]
     assert llm.recipe_calls[-1]["unavailable"] == ["salmon fillet"]
     assert s.question["field"] == "dishes"
+
+
+async def test_after_no_stock_only_dates_the_schedule_can_fill_are_offered():
+    # Stock arrives on Fri 20 Nov; nothing before. Every date offered must have stock.
+    schedule = [ScheduleLine(available_amount=0, available_date=TODAY, sales_unit="L"),
+                ScheduleLine(available_amount=500, available_date=date(2026, 11, 20), sales_unit="L")]
+    gateway = FakeGateway(
+        get_price_availability=lambda arguments: PriceAvailabilityResult(
+            quote_id="q",
+            delivery_date=date.fromisoformat(arguments["delivery_date"]),
+            quoted_at=datetime.now(UTC),
+            offers=[offer(1, available_on_date=0, schedule=schedule)],
+        )
+    )
+    s = Session(llm=FakeLLM(plan=Plan(kind="menu", headcount=50, delivery_date=DELIVERY), dishes=[soup()]),
+                gateway=gateway, text="dinner for 50")
+    await s.start()
+    question = s.question
+    assert question["field"] == "delivery_date"
+    days = [date.fromisoformat(option["value"]) for option in question["options"]]
+    assert days and min(days) == date(2026, 11, 20) and DELIVERY not in days
+    assert all(day.weekday() != 6 for day in days)
+    assert "1 of 1 products" in question["options"][0]["desc"]

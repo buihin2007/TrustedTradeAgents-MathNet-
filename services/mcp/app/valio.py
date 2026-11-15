@@ -57,7 +57,9 @@ def parse_offer(product_id: int, day: date, price: dict, stock: dict, now: datet
     cutoff = datetime.fromisoformat(closing) if closing else None
     if cutoff is not None and cutoff.tzinfo is None:
         cutoff = cutoff.replace(tzinfo=HELSINKI)
-    late = cutoff is not None and now >= cutoff
+    # A passed closing time only blocks the delivery day it belongs to (that day or the next). The mock also
+    # returns closing times far before the requested day; treating those as passed blocked every date.
+    late = cutoff is not None and now >= cutoff and (day - cutoff.astimezone(HELSINKI).date()).days <= 1
     blocked = stock["salesBlock"] or late
     # A schedule line says how much is available FROM its date: the latest line on or before the
     # delivery day applies (exact-date matching reported 0 for everything).
