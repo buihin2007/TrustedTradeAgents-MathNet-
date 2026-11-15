@@ -68,7 +68,27 @@ python scripts/diagnose.py         # why the last request was blocked or slow (g
 python scripts/demo/record_demo.py --rogue --grafana   # records the whole demo as a video (pip install playwright)
 ```
 
-Traces: if the team's `.env` has Langfuse keys, open Langfuse → **Sessions**. One session is one request; see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#audit-and-traceability).
+## See the traces in Langfuse
+
+Every request is recorded in the team's Langfuse project, if `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are in `.env`. Ask the team to invite your email to the project.
+
+1. Send a request in the buyer app. Copy its id: the UUID at the end of the address, `/requests/<id>`.
+2. Sign in at https://cloud.langfuse.com and open the team's project.
+3. Left menu **Tracing → Sessions**. Search the id and open the session: one session is one request.
+4. The session lists one trace per turn, oldest first:
+
+   | Trace name | When |
+   | --- | --- |
+   | `buyer request · start` | The first message |
+   | `buyer request · answer N` | After the buyer's N-th answer |
+   | `buyer decision · approve` or `· reject` | A decision on the Approvals page |
+
+5. Open a trace. Each `step: …` line is a line of the chat's thinking box. Inside:
+   - LLM calls (generations) show the input, output, tokens and cost.
+   - `mcp.<tool>` is a call to the gateway; below it, `gate.call`, `gate.auth` and `gate.caps` are the gateway's own checks, in the same trace.
+6. The **Timeline** view of a trace shows what ran in parallel and what was slow.
+
+Shortcuts: from the Audit page, **Open** jumps to the trace of that decision (needs `NEXT_PUBLIC_LANGFUSE_PROJECT_URL` in `.env`). In **Tracing → Traces**, filter by tag `buyer-request` or `buyer-decision`. Details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#audit-and-traceability).
 
 ## Troubleshooting
 
