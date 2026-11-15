@@ -54,6 +54,7 @@ from .gate import Gate, current_call
 from .openrouter import OpenRouter
 from .policy import in_scope
 from .valio import ValioClient
+from tta_contracts.telemetry import langfuse_otel_env
 
 DEFAULT_LIMITS = MandateLimits()
 
@@ -376,6 +377,7 @@ mcp = create_server()
 
 
 def configure_tracing() -> None:
+    langfuse_otel_env()  # OTEL_EXPORTER_OTLP_* from LANGFUSE_PUBLIC_KEY / SECRET_KEY / BASE_URL
     provider = TracerProvider(
         resource=Resource.create(
             {

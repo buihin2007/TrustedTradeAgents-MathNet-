@@ -14,5 +14,5 @@ def langfuse_otel_env() -> None:
     auth = base64.b64encode(f"{pk}:{sk}".encode()).decode()
     os.environ.setdefault("OTEL_EXPORTER_OTLP_ENDPOINT", f"{base}/api/public/otel")
     os.environ.setdefault("OTEL_EXPORTER_OTLP_HEADERS",
-                          f"Authorization=Basic {auth},x-langfuse-ingestion-version=4")
+                          f"Authorization=Basic%20{auth},x-langfuse-ingestion-version=4")
     os.environ.setdefault("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")

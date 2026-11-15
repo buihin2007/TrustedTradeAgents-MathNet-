@@ -7,9 +7,11 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from tta_contracts.telemetry import langfuse_otel_env
 
 
 def create_provider():
+    langfuse_otel_env()  # OTEL_EXPORTER_OTLP_* from LANGFUSE_PUBLIC_KEY / SECRET_KEY / BASE_URL
     provider = TracerProvider(
         resource=Resource.create(
             {
