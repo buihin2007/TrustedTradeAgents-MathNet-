@@ -277,7 +277,9 @@ class Catalog:
             return "\nUNION ALL\n".join(parts), params
 
         sql, params = statement(vectors)
-        timeout = min(2 + 0.4 * len(queries), 10)
+        # Budget for the whole batch; past it the batch is re-run on full text only (fast), well inside
+        # the buyer API's 40 s call timeout.
+        timeout = min(2 + 0.25 * len(queries), 8)
         try:
             with get_tracer().start_as_current_span("search.execute", record_exception=False):
                 rows = await self._read_only(conn, sql, params, timeout)

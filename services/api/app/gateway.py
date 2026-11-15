@@ -133,7 +133,6 @@ class GatewaySession:
             in {
                 "get_facets",
                 "search_products",
-                "search_products_batch",
                 "get_price_availability",
                 "get_substitutes",
                 "get_order",
@@ -141,13 +140,18 @@ class GatewaySession:
             or (tool == "place_order" and arguments.get("idempotency_key"))
             else 1
         )
+        # A batch search does up to 30 searches in one call: give it room and do not repeat it on a timeout
+        # (a retry would redo the same slow work). Everything else answers well within 20 s.
+        timeout = {"search_products_batch": 40, "place_order": 30}.get(tool, 20)
+        if tool == "search_products_batch":
+            attempts = 1
         for attempt in range(attempts):
             try:
                 if actor not in self.clients:
                     context = await self.stack.enter_async_context(AsyncExitStack())
                     self.contexts[actor] = context
                     client = await context.enter_async_context(
-                        self.factory(self.settings.mcp_url, auth=token, timeout=15)
+                        self.factory(self.settings.mcp_url, auth=token, timeout=45)
                     )
                     tools = await client.list_tools()
                     self.clients[actor] = client
@@ -164,7 +168,7 @@ class GatewaySession:
                 payload = {"request": arguments} if set(properties) == {"request"} else arguments
                 metadata = {}
                 inject(metadata)
-                result = await client.call_tool(tool, payload, meta=metadata, timeout=15)
+                result = await client.call_tool(tool, payload, meta=metadata, timeout=timeout)
                 data = result.structured_content
                 if data is None:
                     blocks = [part.text for part in result.content if hasattr(part, "text")]
@@ -192,6 +196,10 @@ class GatewaySession:
                     except Exception:
                         pass  # preserve the classified error; old sessions must not affect a retry
                 if attempt + 1 == attempts:
+                    if tool == "search_products_batch":
+                        raise GatewayUnavailable(
+                            "The Valio Aimo catalog search took too long. Try again, or ask for fewer dishes."
+                        ) from None
                     raise GatewayUnavailable("Gateway is temporarily unavailable") from None
                 await asyncio.sleep(delay)
         raise GatewayUnavailable("Gateway is temporarily unavailable")
