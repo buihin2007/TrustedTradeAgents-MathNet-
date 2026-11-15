@@ -165,7 +165,8 @@ async def test_order_state_and_audit_roll_back_together(db):
         ("blocked", "blocked"),
     ],
 )
-async def test_rest_pipeline_persists_gateway_outcome_and_audit_in_real_db(db, status, decision):
+async def test_rest_pipeline_persists_gateway_outcome_and_audit_in_real_db(db, status, decision, monkeypatch):
+    monkeypatch.setenv("AGENT_AUTO_ORDER", "1")  # 48 EUR is within the auto limit: no question
     priced = PricedOption(
         label="best_match",
         total_eur="48.40",

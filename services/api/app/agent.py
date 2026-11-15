@@ -254,11 +254,15 @@ class Run:
             if self.state.get("intent_id"):
                 fields["intent_id"] = UUID(self.state["intent_id"])
             await store.update_request(profile, request_id, **fields)
-            events, self.events = self.events, []
-            for event in events:
-                await store.append_event(profile, request_id, trace_id=self.trace_id, **event)
+            await self.write_events()
         except Exception:
             logger.exception("could not persist agent state")
+
+    async def write_events(self) -> None:
+        """Write queued audit events now, so later events (e.g. the order) stay in time order."""
+        events, self.events = self.events, []
+        for event in events:
+            await self.agent.store.append_event(self.profile, self.request.id, trace_id=self.trace_id, **event)
 
 
 class Agent:
@@ -765,6 +769,8 @@ class Agent:
                 step["detail"] = "Signed with your account: the agent can only buy within it" + (
                     f", never anything containing {', '.join(allergens.get(code) or code for code in avoid)}" if avoid else ""
                 )
+            # Persist now: an order recorded later must always find its intent (GET /requests/{id} checks it).
+            await self.store.update_request(run.profile, request_id, intent_id=UUID(state["intent_id"]))
             run.audit("intent.registered", "Buyer intent registered", details={"avoid_allergens": avoid})
 
         async with run.step("Searching the Valio Aimo catalog") as step:
@@ -880,6 +886,7 @@ class Agent:
             "rejected": ("user.rejected", AuditDecision.REJECTED),
         }[order.status.value]
         reasons = [reason.value for reason in order.reasons]
+        await run.write_events()
         await self.store.record_order(
             run.profile,
             request_id,

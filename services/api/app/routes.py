@@ -121,7 +121,8 @@ async def request_detail(request_id: UUID, request: Request, user: User, profile
             item = await owned_request(store, profile, request_id)
         item.order = order
     live, _ = request.app.state.hub.latest(request_id)
-    if live and item.status in ("running", "asking") and not item.order_id:
+    # Final statuses come from the database only, where the order is recorded with them.
+    if live and live["status"] in ("running", "asking") and item.status in ("running", "asking") and not item.order_id:
         # The agent publishes to memory before it writes to the database: show the newer state.
         item.status, item.step, item.error, item.parsed = live["status"], live["step"], live["error"], live["parsed"]
     return item
