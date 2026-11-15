@@ -142,7 +142,9 @@ async def gateway():
             values (1, 'Lactose-free milk', 'ST', 1, '10400', '{FREE_FROM_LACTOSE}', 1, '12345678', 'milk maito'),
                    (2, 'Ordinary milk', 'ST', 1, '10400', '{}', 1, null, 'milk maito'),
                    (3, 'Alternative milk', 'ST', 1, '10400', '{FREE_FROM_LACTOSE}', 1, null, 'milk maito');
-            insert into wholesaler.product_substitutions values (1, 2, 1), (1, 3, 2)
+            insert into wholesaler.product_substitutions values (1, 2, 1), (1, 3, 2);
+            -- the tests below are written for the original limits, not the demo seed
+            update wholesaler.mandates set auto_limit_eur = 150, order_limit_eur = 600, weekly_budget_eur = 2000;
             """)
         private = ec.generate_private_key(ec.SECP256R1())
         verifier = SupabaseJWT("https://project.test", "", None)

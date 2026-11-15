@@ -18,8 +18,9 @@ insert into wholesaler.org_members (org_id, user_id, role)
 values ('00000000-0000-0000-0000-00000000000a', :'user_id'::uuid, 'signer')
 on conflict do nothing;
 
-insert into wholesaler.mandates (org_id, agent_id, version, signed_by)
-values ('00000000-0000-0000-0000-00000000000a', '00000000-0000-0000-0000-0000000000a1', 1, :'user_id'::uuid)
+-- Demo limits: under 300 EUR placed, the challenge example (~1,200 EUR) held, over 3,000 EUR blocked
+insert into wholesaler.mandates (org_id, agent_id, version, auto_limit_eur, order_limit_eur, weekly_budget_eur, signed_by)
+values ('00000000-0000-0000-0000-00000000000a', '00000000-0000-0000-0000-0000000000a1', 1, 300, 3000, 10000, :'user_id'::uuid)
 on conflict (agent_id, version) do nothing;
 
 insert into buyer.profiles (user_id, org_id, agent_id, display_name)
