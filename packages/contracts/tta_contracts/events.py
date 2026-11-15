@@ -54,7 +54,7 @@ class AuditDecision(StrEnum):
 
 
 EventType = Literal[
-    "request.created", "request.parsed", "intent.registered", "search.executed",
+    "request.created", "request.screened", "request.parsed", "intent.registered", "search.executed",
     "price.checked", "options.built", "explanation.written", "agent.asked_user",
     "user.answered", "gate.held", "user.approved", "user.rejected",
     "order.placed", "order.blocked", "mandate.updated", "agent.paused", "agent.resumed",

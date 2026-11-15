@@ -8,7 +8,8 @@ A login app for a buyer (F&B manager) on top of Valio Aimo's MCP gateway.
 
 - `web` (Next.js) -> `api` (FastAPI, buyer side) -> `nginx` -> `mcp` (FastMCP, Valio Aimo gateway) -> Supabase Postgres + Valio mock API.
 - The purchasing agent is a fixed pipeline inside `api`. The LLM only parses the request and writes explanations. Code makes every decision.
-- Every agent tool call passes the Gate in `mcp`: identity, mandate, caps, Jev, order policy. Outcomes: placed / held / blocked.
+- Jev screens the buyer's first message in `api` (spam / small talk -> request rejected, no LLM parse, no gateway call). Fails open if Jev is down.
+- Every agent tool call passes the Gate in `mcp`: identity, mandate, caps, order policy. Outcomes: placed / held / blocked. Per-call Jev in the gate is opt-in (`GATEWAY_JEV=1`).
 
 ## Folders and owners
 
@@ -31,7 +32,7 @@ Only edit your own folders. Need a change elsewhere: ask its owner.
 1. `api` never reads schema `wholesaler`. Everything goes through MCP tools.
 2. `mcp` never trusts numbers from the agent. Prices, stock and totals are recomputed by the gateway.
 3. User tools (`register_intent`, `approve_order`, `reject_order`, `get_mandate`, `update_mandate`, `set_agent_status`, `list_gateway_events`) run only with the user's Supabase JWT. Agent key -> `FORBIDDEN`. See `tta_contracts/tools.py`.
-4. Jev can only make a decision stricter. Numeric limits are checked in code.
+4. Jev only filters what reaches the agent; it never approves anything. Numeric limits are checked in code.
 5. Generated SQL: one SELECT on `wholesaler.v_product_search` + `wholesaler.hybrid_rank`, named bind params only, LIMIT required, role `search_ro`, read-only transaction, 2 s timeout, rows re-checked against `must`.
 
 ## Service rules

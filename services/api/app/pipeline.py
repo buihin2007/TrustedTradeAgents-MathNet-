@@ -23,6 +23,8 @@ from .llm import LLMUnavailable
 from .options import build_options
 from .substitutions import shortage_options
 
+SCREEN_MIN = 0.5  # Jev probability below this: not a purchasing request
+
 tracer = trace.get_tracer("tta.api")
 
 
@@ -95,6 +97,34 @@ class Pipeline:
                 if request is None or request.status != "running":
                     return
                 await self.store.update_request(profile, request_id, trace_id=trace_id)
+                if not request.questions:
+                    # Jev filters spam and small talk once, before any LLM parse or gateway call.
+                    # Fail open: an unavailable screen must not block a real order.
+                    await step("screening")
+                    with self.tracer.start_as_current_span("request.screen", record_exception=False):
+                        score = await self.llm.screen(request.text)
+                    if score is not None and score < SCREEN_MIN:
+                        await self.store.update_request(
+                            profile,
+                            request_id,
+                            status="rejected",
+                            step="complete",
+                            error="This does not look like a purchasing request. Say what to buy, how much and when.",
+                        )
+                        await event(
+                            "request.screened",
+                            "Message is not a purchasing request",
+                            AuditDecision.BLOCKED,
+                            details={"jev_score": score},
+                            actor=ActorType.LLM,
+                        )
+                        return
+                    await event(
+                        "request.screened",
+                        "Purchasing request accepted" if score is not None else "Screen unavailable, request accepted",
+                        details={"jev_score": score},
+                        actor=ActorType.LLM,
+                    )
                 async with self.gateway.session(user) as gateway:
                     await step("parsing")
                     # Facets must precede register_intent: its contract already needs

@@ -231,9 +231,15 @@ class MemoryStore:
 
 
 class FakeLLM:
-    def __init__(self, result=None):
+    def __init__(self, result=None, screen_score=0.97):
         self.result = result or parsed()
         self.answers = []
+        self.screen_score = screen_score
+        self.screened = []
+
+    async def screen(self, text):
+        self.screened.append(text)
+        return self.screen_score
 
     async def parse(self, text, answers, facets):
         self.answers = answers

@@ -1,5 +1,6 @@
 """FastMCP middleware for authorization, hard limits, Jev and durable audit."""
 
+import os
 import logging
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -164,6 +165,10 @@ async def validate_call(state: Call, tool: str, args: dict) -> None:
 
 
 async def judge(state: Call, tool: str, args: dict) -> None:
+    # Jev screens the buyer's first message in the buyer API (spam / small talk). Per-call judging
+    # in the gateway is opt-in: deterministic policy (mandate, intent scope, caps) still applies.
+    if os.getenv("GATEWAY_JEV") != "1":
+        return
     if tool not in JEV_READ_TOOLS | JEV_WRITE_TOOLS or state.replay is not None:
         return
     previous = await one(
