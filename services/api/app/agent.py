@@ -340,7 +340,7 @@ class Agent:
             span.set_attribute("langfuse.trace.metadata.turn", turn)
             span.set_attribute("langfuse.trace.tags", ["buyer-request", "answer" if turn else "start"])
             io(span, input={"request": request.text, "answer": decode(last.answer)[2] if last else None})
-            run.trace_id = run.trace_id or current_trace_id()
+            run.trace_id = current_trace_id() or run.trace_id  # this turn's trace, so audit links open the right one
             try:
                 async with self.gateway.session(user) as gateway:
                     run.gateway = gateway
