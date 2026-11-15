@@ -1,23 +1,22 @@
+import { Icon, Spinner } from "@/components/Icon";
+import { statusLabel, TONE, type Tone } from "@/lib/labels";
 import type { AuditDecision, RequestStatus } from "@/lib/types";
 
-type Tone = "auto" | "human" | "blocked" | "neutral";
-const TONE: Record<string, Tone> = {
-  placed: "auto", buy_auto: "auto", approved: "auto",
-  asking: "human", held: "human", ask_user: "human", approval_required: "human",
-  blocked: "blocked", rejected: "blocked", failed: "blocked",
-};
 const CLASS: Record<Tone, string> = {
-  auto: "bg-auto/10 text-auto border-auto/30",
-  human: "bg-human/10 text-human border-human/30",
-  blocked: "bg-blocked text-white border-blocked",
-  neutral: "bg-neutral-100 text-neutral-600 border-neutral-200",
+  auto: "border-auto/30 bg-auto/10 text-auto",
+  human: "border-human/30 bg-human/10 text-human",
+  blocked: "border-blocked bg-blocked text-white",
+  neutral: "border-slate-200 bg-slate-100 text-slate-700",
 };
+const ICON = { auto: "check", human: "user", blocked: "ban" } as const;
 
+/** One badge for request status and audit decisions. data-status carries the raw value for tests and the demo recorder. */
 export function Status({ value }: { value: RequestStatus | AuditDecision | string }) {
   const tone = TONE[value] ?? "neutral";
   return (
-    <span data-status={value} className={`inline-block rounded-full border px-2 py-0.5 text-xs font-medium ${CLASS[tone]}`}>
-      {value.replaceAll("_", " ")}
+    <span data-status={value} title={value} className={`chip ${CLASS[tone]}`}>
+      {value === "running" ? <Spinner className="h-3 w-3" /> : tone !== "neutral" && <Icon name={ICON[tone]} className="h-3 w-3" />}
+      {statusLabel(value)}
     </span>
   );
 }

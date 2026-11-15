@@ -1,11 +1,70 @@
 @import "tailwindcss";
 
-/* Status colours keep one meaning everywhere: blue = automatic, orange = needs a person, black = blocked. */
+/*
+ * Design tokens (UI/UX Pro Max: "Minimalism & Swiss", authority navy on slate).
+ * Status colours keep one meaning everywhere:
+ *   auto    = the agent acted within its mandate (blue)
+ *   human   = a person has to decide (orange; the 700 shade so small text passes 4.5:1)
+ *   blocked = the gateway refused (near-black)
+ */
 @theme {
-  --color-auto: #1f4fd8;
-  --color-human: #e8590c;
-  --color-blocked: #111111;
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --color-brand: #1e3a8a;
+  --color-auto: #1d4ed8;
+  --color-human: #c2410c;
+  --color-blocked: #0f172a;
+  --font-sans: "Fira Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "Fira Code", ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
-body { @apply bg-neutral-50 text-neutral-900 antialiased; }
+@layer base {
+  body {
+    @apply bg-slate-50 text-slate-900 antialiased;
+  }
+  button:not(:disabled),
+  a,
+  summary,
+  select,
+  label:has(> input[type="checkbox"]) {
+    cursor: pointer;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-auto);
+    outline-offset: 2px;
+  }
+}
+
+@utility card {
+  @apply rounded-xl border border-slate-200 bg-white;
+}
+@utility btn {
+  @apply inline-flex min-h-10 items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-50;
+}
+@utility btn-primary {
+  @apply btn bg-auto text-white hover:bg-blue-800;
+}
+@utility btn-human {
+  @apply btn bg-human text-white hover:bg-orange-800;
+}
+@utility btn-dark {
+  @apply btn bg-blocked text-white hover:bg-slate-700;
+}
+@utility btn-ghost {
+  @apply btn border border-slate-300 bg-white text-slate-700 hover:bg-slate-50;
+}
+@utility field {
+  @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-500 transition-colors focus:border-auto focus:ring-2 focus:ring-auto/20 focus:outline-none disabled:opacity-60;
+}
+@utility chip {
+  @apply inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

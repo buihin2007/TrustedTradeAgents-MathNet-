@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { use, useEffect, useRef, useState } from "react";
 import { Baskets, Dishes, OrderLink, Question, Say, Thinking, UserBubble } from "@/components/Chat";
+import { Icon, Spinner } from "@/components/Icon";
 import { Status } from "@/components/Status";
 import { api, useRequestLive } from "@/lib/api";
 import type { AskItem, FeedItem, StepItem } from "@/lib/types";
@@ -49,14 +50,20 @@ export default function RequestPage({ params }: { params: Promise<{ id: string }
     setBusy(false);
   };
 
-  if (!r) return <p className={error ? "text-human" : "text-neutral-500"}>{error ? `Could not load request: ${error}` : "Loading..."}</p>;
+  if (!r) {
+    return error
+      ? <p role="alert" className="text-human">Could not load request: {error}</p>
+      : <div className="space-y-4" aria-busy="true"><div className="ml-auto h-10 w-2/3 animate-pulse rounded-2xl bg-slate-200" /><div className="h-28 animate-pulse rounded-xl bg-slate-200" /></div>;
+  }
   const last = feed[feed.length - 1];
   const waiting = r.status === "running" && !(last?.t === "step" && last.status === "run");
 
   return (
-    <div className="space-y-4 pb-24">
+    <div className="space-y-5 pb-24">
       <div className="flex items-center justify-between">
-        <Link href="/requests" className="text-sm text-neutral-500">← Requests</Link>
+        <Link href="/requests" className="flex min-h-9 items-center gap-1.5 rounded-lg pr-2 text-sm text-slate-600 hover:text-slate-900">
+          <Icon name="back" />Requests
+        </Link>
         <Status value={r.status} />
       </div>
       <UserBubble>{r.text}</UserBubble>
@@ -69,14 +76,14 @@ export default function RequestPage({ params }: { params: Promise<{ id: string }
         return <Say key={index} item={item} />;
       })}
       {waiting && (
-        <p className="flex items-center gap-2 text-sm text-neutral-500">
-          <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-neutral-300 border-t-auto" />
+        <p role="status" className="flex items-center gap-2 pl-10 text-sm text-slate-600">
+          <Spinner className="h-3.5 w-3.5" />
           Thinking…
         </p>
       )}
       {r.parsed?.order && <OrderLink status={r.parsed.order.status} />}
       {!r.parsed && r.error && <Say item={{ t: "say", text: r.error, tone: "error" }} />}
-      {sendError && <p className="text-sm text-human">{sendError}</p>}
+      {sendError && <p role="alert" className="flex items-start gap-2 text-sm text-human"><Icon name="alert" className="mt-0.5" />{sendError}</p>}
       <div ref={bottom} />
     </div>
   );
