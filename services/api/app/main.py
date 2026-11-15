@@ -17,6 +17,7 @@ from .live import Hub
 from .routes import router
 from .store import Conflict, PostgresStore
 from .telemetry import create_provider
+from .trust import QuoteVerifier
 
 
 def create_app(settings: Settings | None = None, *, store=None, gateway=None, llm=None, trace_provider=None) -> FastAPI:
@@ -38,6 +39,7 @@ def create_app(settings: Settings | None = None, *, store=None, gateway=None, ll
             app.state.pipeline = Agent(
                 app.state.store, app.state.gateway, app.state.llm, app.state.hub,
                 tracer_instance=tracer, today=config.today,
+                verifier=QuoteVerifier(config.mcp_url) if gateway is None else None,
             )
             if gateway is None:  # real gateway only: fetch facet codes before the first request
                 app.state.tasks.start(app.state.pipeline.warm())

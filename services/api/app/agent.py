@@ -9,6 +9,7 @@ Every step is published to the browser the moment it happens.
 import asyncio
 import json
 import logging
+import os
 import re
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
@@ -31,6 +32,7 @@ from tta_contracts import (
     PriceAvailabilityResult,
     RegisterIntentRequest,
     SearchResult,
+    SubstituteGroup,
 )
 
 from .auth import Identity
@@ -39,6 +41,7 @@ from .clarify import parse_date, parse_quantity
 from .gateway import GatewayDenied, GatewayUnavailable
 from .live import FINAL, Hub
 from .sourcing import (
+    autonomous,
     build_baskets,
     criteria,
     dish_cards,
@@ -46,6 +49,7 @@ from .sourcing import (
     needs_from_dishes,
     needs_from_items,
     pick,
+    short_needs,
 )
 from .telemetry import current_trace_id, io
 
@@ -258,7 +262,9 @@ class Run:
 
 
 class Agent:
-    def __init__(self, store, gateway, brain, hub: Hub | None = None, tracer_instance=None, today=None):
+    def __init__(self, store, gateway, brain, hub: Hub | None = None, tracer_instance=None, today=None, verifier=None):
+        self.verifier = verifier  # app.trust.QuoteVerifier: checks Valio Aimo's quote signatures
+        self.auto_order = os.getenv("AGENT_AUTO_ORDER", "1") != "0"
         self.store = store
         self.gateway = gateway
         self.brain = brain
@@ -527,7 +533,8 @@ class Agent:
             menu = state.pop("menu", None) or {}
             shown = [dish["name"] for dish in menu.get("dishes", [])]
             old_names, old_missing = self.exclusions.get(run.request.id, ([], []))
-            self.exclusions[run.request.id] = (old_names + shown, sorted(set(old_missing) | set(state.pop("missing", []))))
+            missing = sorted(set(old_missing) | set(state.pop("missing", [])))
+            self.exclusions[run.request.id] = (old_names + shown, missing)
             self.reset_sourcing(run)
             self.speculate(run.request.id, plan)
             understood = True
@@ -647,7 +654,7 @@ class Agent:
             needs_from_dishes(dishes, plan.headcount, sourced["dairy"]) if dishes else []
         )
         async with run.step("Building baskets") as step:
-            baskets = build_baskets(needs, sourced["chosen"], sourced["offers"], day, sourced["limits"])
+            baskets = build_baskets(needs, sourced["chosen"], sourced["offers"], day, sourced["limits"], sourced["valio"])
             step["detail"] = (
                 f"{len(baskets)} option{'s' if len(baskets) != 1 else ''}: "
                 + ", ".join(f"{b['title']} {b['total']} EUR" for b in baskets)
@@ -655,7 +662,7 @@ class Agent:
                 else "Nothing can be delivered that day"
             )
         if not baskets:
-            problems = missing_report(needs, sourced["chosen"], sourced["offers"], day)
+            problems = missing_report(needs, sourced["chosen"], sourced["offers"], day, sourced["valio"])
             detail = "; ".join(
                 f"{p['need']}: {p['reason']}" + (f" (available from {p['earliest']})" if p["earliest"] else "")
                 for p in problems[:8]
@@ -668,6 +675,17 @@ class Agent:
         pantry = sorted({staple for dish in dishes for staple in dish.pantry})
         run.feed.append({"t": "baskets", "baskets": baskets, "pantry": pantry, "date": day.isoformat()})
         run.audit("options.built", f"{len(baskets)} baskets built", details={"totals": [b["total"] for b in baskets]})
+        if self.auto_order and autonomous(baskets[0]):
+            # Within its authority: complete, no substitutes, under the auto limit. Order without asking.
+            state["choice"] = 0
+            run.say(
+                f"{baskets[0]['title']} ({baskets[0]['total']} EUR) is complete and within your auto limit, "
+                "so I am ordering it without asking. The gateway checks the mandate again.",
+            )
+            run.audit("options.built", "Agent ordered within its authority", AuditDecision.BUY_AUTO,
+                      details={"basket": baskets[0]["label"], "total": baskets[0]["total"]})
+            await self.place(run, plan)
+            return
         options = []
         for index, basket in enumerate(baskets):
             notes = [f"{len(basket['lines'])} products", basket["gate_note"]]
@@ -769,25 +787,55 @@ class Agent:
             ][:14]
         run.audit("search.executed", "Catalog searched", details={"queries": len(needs), "products": len(ids)})
 
-        offers, quote_id = {}, None
-        if ids:
-            async with run.step(f"Checking price and stock for {fmt_day(day, today)}") as step:
+        offers, quote_id, valio, trust = {}, None, {}, None
+
+        async def price(product_ids, title):
+            async with run.step(title) as step:
                 quote = await gateway.call(
                     "get_price_availability",
-                    {"intent_id": state["intent_id"], "product_ids": ids, "delivery_date": day.isoformat()},
+                    {"intent_id": state["intent_id"], "product_ids": product_ids, "delivery_date": day.isoformat()},
                     PriceAvailabilityResult,
                 )
-                offers = {offer.product_id: offer for offer in quote.offers}
-                quote_id = quote.quote_id
                 priced = [offer for offer in quote.offers if offer.unit_price_eur is not None and not offer.error]
                 in_stock = sum(1 for offer in priced if (offer.available_on_date or 0) > 0)
-                step["detail"] = f"{len(priced)} of {len(ids)} priced, {in_stock} in stock that day"
-            run.audit("price.checked", "Prices and stock checked", details={"products": len(ids)})
+                step["detail"] = f"{len(priced)} of {len(product_ids)} priced, {in_stock} in stock that day"
+                if self.verifier is not None:
+                    trusted, sentence = await self.verifier.check(quote)
+                    step["items"] = [("✓ " if trusted else "⚠ ") + sentence]
+                    run.audit("price.checked", "Prices and stock checked",
+                              details={"products": len(product_ids), "signed": trusted, "trust": sentence})
+                else:
+                    run.audit("price.checked", "Prices and stock checked", details={"products": len(product_ids)})
+            return quote
+
+        if ids:
+            quote = await price(ids, f"Checking price and stock for {fmt_day(day, today)}")
+            offers, quote_id = {offer.product_id: offer for offer in quote.offers}, quote.quote_id
+            short = short_needs(needs, chosen, offers)[:10]
+            if short:
+                async with run.step("Looking up Valio Aimo's own substitutes") as step:
+                    groups = await gateway.call(
+                        "get_substitutes",
+                        {"intent_id": state["intent_id"], "product_ids": [original for _, original in short]},
+                        list[SubstituteGroup],
+                    )
+                    by_original = {group.product_id: group.substitutes for group in groups}
+                    for need, original in short:
+                        valio[need.ref] = [(original, hit) for hit in by_original.get(original, [])[:3]]
+                    found = sum(1 for pairs in valio.values() if pairs)
+                    step["detail"] = f"{found} of {len(short)} short item{'s' if len(short) != 1 else ''} have a mapped substitute"
+                extra = [hit.product_id for pairs in valio.values() for _, hit in pairs if hit.product_id not in offers]
+                extra = list(dict.fromkeys(extra))[: max(0, 50 - len(ids))]
+                if extra:
+                    # One quote must cover every line of the order, so quote originals and substitutes together.
+                    quote = await price(ids + extra, "Pricing the substitutes")
+                    offers, quote_id = {offer.product_id: offer for offer in quote.offers}, quote.quote_id
         state["quote_id"] = quote_id
         sourced = {
             "signature": signature,
             "chosen": chosen,
             "offers": offers,
+            "valio": valio,
             "dishes": dishes,
             "dairy": dairy,
             "limits": await self.limits(run),
@@ -809,7 +857,11 @@ class Agent:
                     OrderOption(
                         label=basket["label"],
                         lines=[
-                            OrderLineIn(product_id=line["product_id"], quantity_units=line["units"])
+                            OrderLineIn(
+                                product_id=line["product_id"],
+                                quantity_units=line["units"],
+                                substitute_for=line.get("substitute_for"),
+                            )
                             for line in basket["lines"]
                         ],
                         explanation=basket["explanation"][:500],

@@ -16,6 +16,7 @@ from tta_contracts import (
     PriceAvailabilityResult,
     ProductHit,
     SearchResult,
+    SubstituteGroup,
 )
 
 from app.brain import Dish, Ingredient, Item, Plan
@@ -304,6 +305,9 @@ class FakeGateway:
                     hits=[hit(name_en=query["query_text"], name_fi=query.get("query_text_alt"))],
                 )
                 for query in arguments["queries"]
+            ],
+            "get_substitutes": lambda arguments: [
+                SubstituteGroup(product_id=product_id, substitutes=[]) for product_id in arguments["product_ids"]
             ],
             "get_mandate": Mandate(
                 mandate_id="m",

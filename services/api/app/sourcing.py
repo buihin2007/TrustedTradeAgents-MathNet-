@@ -47,6 +47,7 @@ class Candidate:
     units: Decimal
     cost: Decimal
     available: Decimal
+    substitute_for: int | None = None  # original product when this is a Valio substitute pair
 
     @property
     def enough(self) -> bool:
@@ -180,7 +181,8 @@ def pick(needs: list[Need], hits: dict[str, list[ProductHit]], cap: int = 50):
     return chosen, ids[:cap]
 
 
-def candidates(need: Need, hits: list[ProductHit], offers: dict[int, Offer]) -> list[Candidate]:
+def candidates(need: Need, hits: list[ProductHit], offers: dict[int, Offer], origin=None) -> list[Candidate]:
+    """Priced, sized options for a need. `origin` maps a Valio substitute's id to the product it replaces."""
     result = []
     for rank, hit in enumerate(hits):
         offer = offers.get(hit.product_id)
@@ -202,9 +204,34 @@ def candidates(need: Need, hits: list[ProductHit], offers: dict[int, Offer]) -> 
                 units=units,
                 cost=(offer.unit_price_eur * units).quantize(CENT),
                 available=Decimal(str(offer.available_on_date or 0)),
+                substitute_for=(origin or {}).get(hit.product_id),
             )
         )
     return result
+
+
+def order_key(strategy: str):
+    if strategy == "cheapest":
+        return lambda c: (c.offer.unit_price_eur / c.size, c.rank)
+    if strategy == "most_reliable":
+        return lambda c: (-(c.hit.delivery_reliability or -1), c.rank)
+    return lambda c: c.rank
+
+
+def split(options: list[Candidate], strategy: str, need: Need) -> list[Candidate] | None:
+    """Cover the amount with several products of the same ingredient when no single one has enough."""
+    remaining, picks = need.amount, []
+    for option in sorted(options, key=order_key(strategy)):
+        if remaining <= 0:
+            break
+        stock = (option.available / option.step).to_integral_value(rounding=ROUND_FLOOR) * option.step
+        if stock <= 0:
+            continue
+        wanted = max((remaining / option.size / option.step).to_integral_value(rounding=ROUND_CEILING) * option.step, option.step)
+        units = min(wanted, stock)
+        picks.append(replace(option, units=units, cost=(option.offer.unit_price_eur * units).quantize(CENT)))
+        remaining -= units * option.size
+    return picks if remaining <= 0 and len(picks) > 1 else None
 
 
 def choose(options: list[Candidate], strategy: str) -> Candidate | None:
@@ -229,19 +256,25 @@ def earliest(options: list[Candidate], day: date) -> date | None:
 
 
 def resolve(need: Need, alt: Need | None, pool: dict[str, list[Candidate]], strategy: str, day: date):
-    """One basket line for a need: the product, a recipe alternative, a partial fill, or why it is missing."""
+    """Basket lines for one need, in this order: one product; several products of the same ingredient;
+    a Valio substitute pair (the gateway holds it for approval); the recipe's own alternative; a partial
+    fill. Returns (lines, note, problem): problem explains a need that cannot be sourced at all."""
     options = pool.get(need.key, [])
     found = choose(options, strategy)
     if found:
-        return found, "", None
+        return [found], "", None
+    if picks := split(options, strategy, need):
+        return picks, f"Split across {len(picks)} products to cover {qty(need.amount, need.unit)}", None
+    if found := choose(pool.get(need.key + "/valio", []), strategy):
+        return [found], f"Valio Aimo substitute for {need.name}: needs your approval", None
     if alt and (found := choose(pool.get(alt.key, []), strategy)):
         note = f"Instead of {need.name}: {alt.name}" + (f" ({alt.note})" if alt.note else "")
-        return found, note, None
+        return [found], note, None
     partial = max((o for o in options if o.available >= o.step), key=lambda o: o.available, default=None)
     if partial:
         units = (partial.available / partial.step).to_integral_value(rounding=ROUND_FLOOR) * partial.step
         short = replace(partial, units=units, cost=(partial.offer.unit_price_eur * units).quantize(CENT))
-        return short, f"Only {qty(units)} of {qty(partial.units)} units in stock that day", None
+        return [short], f"Only {qty(units)} of {qty(partial.units)} units in stock that day", None
     when = earliest(options, day)
     if not options:
         reason = "no matching product in the catalog"
@@ -249,8 +282,32 @@ def resolve(need: Need, alt: Need | None, pool: dict[str, list[Candidate]], stra
         reason = "the order cut-off for that date has passed"
     else:
         reason = "not in stock on that date"
-    return None, "", {"need": need.name, "essential": need.essential, "reason": reason,
-                      "earliest": when.isoformat() if when else None}
+    return [], "", {"need": need.name, "essential": need.essential, "reason": reason,
+                    "earliest": when.isoformat() if when else None}
+
+
+def make_pool(needs: list[Need], chosen: dict, offers: dict[int, Offer], valio: dict | None = None) -> dict:
+    """Candidates per need key; Valio substitute pairs under '<key>/valio'."""
+    pool = {need.key: candidates(need, chosen.get(need.ref, []), offers) for need in needs}
+    for need in needs:
+        pairs = (valio or {}).get(need.ref, [])
+        if pairs:
+            pool[need.key + "/valio"] = candidates(
+                need, [hit for _, hit in pairs], offers, {hit.product_id: original for original, hit in pairs}
+            )
+    return pool
+
+
+def short_needs(needs: list[Need], chosen: dict, offers: dict[int, Offer]) -> list[tuple[Need, int]]:
+    """Needs no single product covers on the day, with the product a Valio substitute should replace."""
+    result = []
+    for need in needs:
+        if need.alt_of or not chosen.get(need.ref):
+            continue
+        options = candidates(need, chosen[need.ref], offers)
+        if not any(option.enough for option in options):
+            result.append((need, chosen[need.ref][0].product_id))
+    return result
 
 
 def gate(total: Decimal, limits: MandateLimits | None) -> tuple[str, str]:
@@ -263,40 +320,60 @@ def gate(total: Decimal, limits: MandateLimits | None) -> tuple[str, str]:
     return "auto", "Within your auto limit: placed immediately"
 
 
-def build_baskets(needs: list[Need], chosen: dict, offers: dict[int, Offer], day: date, limits=None) -> list[dict]:
+def footprint(lines: list[dict]) -> tuple[float | None, float | None]:
+    """(kg CO2e for the basket, cost-weighted delivery reliability), from what the catalog knows."""
+    co2 = [line["co2_kg"] for line in lines if line["co2_kg"] is not None]
+    weighted = [(float(line["line_total"]), line["reliability"]) for line in lines if line["reliability"] is not None]
+    spend = sum(cost for cost, _ in weighted)
+    reliability = sum(cost * value for cost, value in weighted) / spend if spend else None
+    return (round(sum(co2), 1) if co2 else None, round(reliability, 3) if reliability is not None else None)
+
+
+def line_of(found: Candidate, need: Need, note: str) -> dict:
+    hit = found.hit
+    weight = found.units * found.size if need.unit in ("kg", "l") else None
+    return {
+        "product_id": hit.product_id,
+        "name": hit.name_en or hit.name_fi or f"#{hit.product_id}",
+        "units": float(found.units),
+        "sales_unit": hit.sales_unit,
+        "pack": qty(found.size, "pcs" if need.unit == "pcs" else need.unit),
+        "unit_price": str(found.offer.unit_price_eur),
+        "line_total": str(found.cost),
+        "need": need.name,
+        "amount": qty(need.amount, need.unit),
+        "note": note,
+        "substitute_for": found.substitute_for,
+        "reliability": hit.delivery_reliability,
+        "co2_kg": round(float(weight) * hit.co2_kg_per_kg, 1) if weight and hit.co2_kg_per_kg is not None else None,
+        "origin": hit.country_of_origin,
+        "dishes": list(need.dishes),
+    }
+
+
+def build_baskets(needs: list[Need], chosen: dict, offers: dict[int, Offer], day: date, limits=None, valio=None) -> list[dict]:
     primaries = [need for need in needs if not need.alt_of]
     alternative = {need.alt_of: need for need in needs if need.alt_of}
-    pool = {need.key: candidates(need, chosen.get(need.ref, []), offers) for need in needs}
+    pool = make_pool(needs, chosen, offers, valio)
     baskets, seen = [], set()
     for label, title in STRATEGIES:
         lines, missing, total = [], [], Decimal(0)
         for need in primaries:
-            found, note, problem = resolve(need, alternative.get(need.key), pool, label, day)
-            if found is None:
+            picks, note, problem = resolve(need, alternative.get(need.key), pool, label, day)
+            if problem:
                 missing.append(problem)
                 continue
-            total += found.cost
-            lines.append(
-                {
-                    "product_id": found.hit.product_id,
-                    "name": found.hit.name_en or found.hit.name_fi or f"#{found.hit.product_id}",
-                    "units": float(found.units),
-                    "sales_unit": found.hit.sales_unit,
-                    "pack": qty(found.size, "pcs" if need.unit == "pcs" else found.need.unit),
-                    "unit_price": str(found.offer.unit_price_eur),
-                    "line_total": str(found.cost),
-                    "need": need.name,
-                    "amount": qty(need.amount, need.unit),
-                    "note": note,
-                    "reliability": found.hit.delivery_reliability,
-                    "dishes": list(need.dishes),
-                }
-            )
+            for found in picks:
+                total += found.cost
+                lines.append(line_of(found, need, note))
         signature = tuple((line["product_id"], line["units"]) for line in lines)
         if not lines or signature in seen:
             continue
         seen.add(signature)
         level, gate_note = gate(total, limits)
+        if any(line["substitute_for"] for line in lines) and level == "auto":
+            level, gate_note = "approval", "Contains a Valio substitute: it will wait in Approvals"
+        co2, reliability = footprint(lines)
         baskets.append(
             {
                 "label": label,
@@ -306,11 +383,22 @@ def build_baskets(needs: list[Need], chosen: dict, offers: dict[int, Offer], day
                 "missing": missing,
                 "gate": level,
                 "gate_note": gate_note,
+                "co2_kg": co2,
+                "reliability": reliability,
                 "explanation": f"{title}: {len(lines)} lines, {total.quantize(CENT)} EUR"
                 + (f", {len(missing)} not available" if missing else ""),
             }
         )
     return baskets
+
+
+def autonomous(basket: dict) -> bool:
+    """The agent may order this basket without asking: within the auto limit, complete, no substitutes."""
+    return (
+        basket["gate"] == "auto"
+        and not basket["missing"]
+        and all(not line["note"] or line["note"].startswith("Split") for line in basket["lines"])
+    )
 
 
 def dish_cards(dishes: list[Dish], headcount: int, chosen: dict, offers: dict, day: date, dairy_claims=()) -> list[dict]:
@@ -320,18 +408,17 @@ def dish_cards(dishes: list[Dish], headcount: int, chosen: dict, offers: dict, d
         needs = needs_from_dishes([dish], headcount, dairy_claims)
         primaries = [need for need in needs if not need.alt_of]
         alternative = {need.alt_of: need for need in needs if need.alt_of}
-        pool = {need.key: candidates(need, chosen.get(need.ref, []), offers) for need in needs}
+        pool = make_pool(needs, chosen, offers)
         covered, cost, absent, swaps = 0, Decimal(0), [], []
         for need in primaries:
-            found, note, problem = resolve(need, alternative.get(need.key), pool, "best_match", day)
-            if found is None or note.startswith("Only"):
+            picks, note, problem = resolve(need, alternative.get(need.key), pool, "best_match", day)
+            if problem or note.startswith("Only"):
                 absent.append(need.name)
             else:
                 covered += 1
-                if note:
+                if note and not note.startswith("Split"):
                     swaps.append(note)
-            if found is not None:
-                cost += found.cost
+            cost += sum((found.cost for found in picks), Decimal(0))
         per_person = (cost / headcount).quantize(CENT) if headcount and cost else None
         stock = (
             f"all {len(primaries)} ingredients in stock"
@@ -355,9 +442,9 @@ def dish_cards(dishes: list[Dish], headcount: int, chosen: dict, offers: dict, d
     return sorted(cards, key=lambda card: (-(card["covered"] / max(1, card["total"])), card["name"]))
 
 
-def missing_report(needs: list[Need], chosen: dict, offers: dict[int, Offer], day: date) -> list[dict]:
+def missing_report(needs: list[Need], chosen: dict, offers: dict[int, Offer], day: date, valio=None) -> list[dict]:
     """Why each need that cannot be sourced is missing (used when no basket could be built)."""
-    pool = {need.key: candidates(need, chosen.get(need.ref, []), offers) for need in needs}
+    pool = make_pool(needs, chosen, offers, valio)
     alternative = {need.alt_of: need for need in needs if need.alt_of}
     report = []
     for need in needs:

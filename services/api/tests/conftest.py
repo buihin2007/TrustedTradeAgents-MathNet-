@@ -21,3 +21,9 @@ def api():
     app.dependency_overrides[current_user] = lambda: Identity(str(USER_ID), "buyer-jwt")
     with TestClient(app) as client:
         yield client, app, store, gateway
+
+
+@pytest.fixture(autouse=True)
+def ask_before_ordering(monkeypatch):
+    """Most tests walk the full conversation; tests of autonomous ordering switch this back on."""
+    monkeypatch.setenv("AGENT_AUTO_ORDER", "0")
