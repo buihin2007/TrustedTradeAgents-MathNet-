@@ -27,6 +27,7 @@ from tta_contracts import (
     PriceAvailabilityRequest,
     RegisterIntentRequest,
     RejectOrderRequest,
+    SearchProductsBatchRequest,
     SearchProductsRequest,
     SetAgentStatusRequest,
     SubstitutesRequest,
@@ -49,6 +50,7 @@ tracer = get_tracer()
 REQUESTS = {
     "register_intent": RegisterIntentRequest,
     "search_products": SearchProductsRequest,
+    "search_products_batch": SearchProductsBatchRequest,
     "get_price_availability": PriceAvailabilityRequest,
     "get_substitutes": SubstitutesRequest,
     "place_order": PlaceOrderRequest,
@@ -143,6 +145,10 @@ async def validate_call(state: Call, tool: str, args: dict) -> None:
 
     if isinstance(request, SearchProductsRequest):
         await state.catalog.validate(conn, request.criteria)
+        return
+    if isinstance(request, SearchProductsBatchRequest):
+        for criteria in request.queries:
+            await state.catalog.validate(conn, criteria)
         return
 
     ids = (

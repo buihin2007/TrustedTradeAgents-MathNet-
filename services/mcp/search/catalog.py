@@ -90,8 +90,29 @@ def validate_size(criteria: Criteria) -> None:
         raise ToolError("Invalid query text")
 
 
+def ranked(products: list[ProductHit], criteria: Criteria) -> list[ProductHit]:
+    """Python mirror of ORDER_BY, used where rows of several searches come back in one statement."""
+    brands = set(criteria.prefer.brands)
+
+    def key(item: ProductHit):
+        score = -(item.rrf_score or 0)
+        by_sort = {
+            "relevance": (score,),
+            "delivery_reliability": (
+                -(item.delivery_reliability if item.delivery_reliability is not None else -1),
+                score,
+            ),
+            "co2": (item.co2_kg_per_kg if item.co2_kg_per_kg is not None else float("inf"), score),
+        }[criteria.prefer.sort]
+        return (0 if item.brand in brands else 1, *by_sort, item.product_id)
+
+    return sorted(products, key=key)
+
+
 class Catalog:
     def __init__(self, router: OpenRouter):
+        self.vectors_off_until = 0.0
+        self.vector_index: bool | None = None
         self.router = router
         self.facet_cache: tuple[float, Facets] | None = None
         self.sql_cache: dict[str, str] = {}
@@ -221,13 +242,87 @@ class Catalog:
             diagnosis=diagnosis,
         ), sql
 
-    async def _read_only(self, conn, sql: str, params: dict) -> list[dict]:
+    async def search_batch(
+        self, conn, queries: list[Criteria], intent_must: Must
+    ) -> tuple[list[SearchResult], str]:
+        """Many hybrid searches with one embeddings request and one SQL statement (UNION ALL)."""
+        texts = [criteria.bind_params()["q_text"] for criteria in queries]
+        vectors: list[str | None] = [None] * len(queries)
+        if self.vector_index is None:
+            # Without the HNSW index (migration 0004) every vector search scans the whole catalog.
+            found = await all_rows(
+                conn,
+                "select 1 from pg_indexes where schemaname = 'wholesaler' "
+                "and tablename = 'products' and indexdef ilike '%%hnsw%%' limit 1",
+            )
+            self.vector_index = bool(found)
+        if (
+            self.vector_index
+            and os.getenv("SEARCH_BATCH_VECTORS", "1") != "0"
+            and monotonic() >= self.vectors_off_until
+        ):
+            with get_tracer().start_as_current_span("search.embed", record_exception=False):
+                vectors = await self.router.embed_many(texts)
+
+        def statement(vectors):
+            parts, params = [], {}
+            for index, criteria in enumerate(queries):
+                select = template_for(criteria, RANKED, "h.rrf_score").replace(
+                    "SELECT p.*,", f"SELECT {index} AS q_idx, p.*,", 1
+                )
+                # Each sub-select keeps its own named parameters: :limit -> %(limit_3)s
+                parts.append("(" + PARAMETER.sub(lambda m, i=index: f"%({m[1]}_{i})s", select) + ")")
+                bound = criteria.bind_params() | {"q_emb": vectors[index], "k": 300}
+                params |= {f"{name}_{index}": value for name, value in bound.items()}
+            return "\nUNION ALL\n".join(parts), params
+
+        sql, params = statement(vectors)
+        timeout = min(2 + 0.4 * len(queries), 10)
+        try:
+            with get_tracer().start_as_current_span("search.execute", record_exception=False):
+                rows = await self._read_only(conn, sql, params, timeout)
+        except QueryCanceled:
+            if not any(vectors):
+                raise ToolError("Catalog search timed out") from None
+            # Vector search is too slow here (missing HNSW index?): answer from full text and stop
+            # paying for it for ten minutes.
+            self.vectors_off_until = monotonic() + 600
+            sql, params = statement([None] * len(queries))
+            try:
+                rows = await self._read_only(conn, sql, params, timeout)
+            except QueryCanceled as exc:
+                raise ToolError("Catalog search timed out") from exc
+
+        grouped = defaultdict(list)
+        for row in rows:
+            grouped[row["q_idx"]].append(ProductHit.model_validate(row))
+        results = []
+        with get_tracer().start_as_current_span("search.postcheck"):
+            for index, criteria in enumerate(queries):
+                products = ranked(grouped[index], criteria)
+                hits = []
+                for item in products:
+                    if not mismatches(item, criteria.must) and not mismatches(item, intent_must):
+                        item.matched_must = list(conditions(criteria))
+                        hits.append(item)
+                results.append(
+                    SearchResult(
+                        query_id=str(uuid4()),
+                        criteria_shape=criteria.shape(),
+                        hits=hits,
+                        sql_source="template",
+                        dropped_by_postcheck=len(products) - len(hits),
+                    )
+                )
+        return results, sql
+
+    async def _read_only(self, conn, sql: str, params: dict, timeout: float = 2) -> list[dict]:
         # Always roll back the savepoint to restore the role, read-only flag and timeout.
         async with conn.transaction(force_rollback=True):
             await conn.execute("SET LOCAL transaction_read_only = on")
             await conn.execute("SET LOCAL ROLE search_ro")
             await conn.execute("SET LOCAL search_path = pg_catalog")
-            await conn.execute("SET LOCAL statement_timeout = '2s'")
+            await conn.execute(f"SET LOCAL statement_timeout = '{int(timeout * 1000)}ms'")
             return await all_rows(conn, PARAMETER.sub(r"%(\1)s", sql), params)
 
     async def _diagnose(self, conn, criteria: Criteria, params: dict) -> list[Relaxation] | None:

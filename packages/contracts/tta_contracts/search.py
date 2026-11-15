@@ -3,7 +3,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .limits import MAX_SEARCH_LIMIT
+from .limits import MAX_SEARCH_LIMIT, MAX_BATCH_QUERIES
 
 
 class _Strict(BaseModel):
@@ -88,6 +88,12 @@ class Criteria(_Strict):
 class SearchProductsRequest(_Strict):
     intent_id: str
     criteria: Criteria
+
+
+class SearchProductsBatchRequest(_Strict):
+    """Many searches for one intent in one call: one SearchResult per query, same order."""
+    intent_id: str
+    queries: list[Criteria] = Field(min_length=1, max_length=MAX_BATCH_QUERIES)
 
 
 class ProductHit(BaseModel):

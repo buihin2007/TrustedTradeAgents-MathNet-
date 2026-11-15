@@ -89,6 +89,24 @@ class OpenRouter:
         except MODEL_ERRORS:
             return None
 
+    async def embed_many(self, queries: list[str]) -> list[str | None]:
+        """One embeddings request for many queries; None where no usable vector came back."""
+        try:
+            data = await self._post("v1/embeddings", {"model": self.embed_model, "input": queries}, 6)
+            rows = sorted(data["data"], key=lambda row: row.get("index", 0))
+            if len(rows) != len(queries):
+                return [None] * len(queries)
+            vectors = []
+            for row in rows:
+                embedding = row["embedding"]
+                usable = len(embedding) == EMBED_DIMS and all(
+                    type(value) in (float, int) and isfinite(value) for value in embedding
+                )
+                vectors.append(json.dumps(embedding, separators=(",", ":")) if usable else None)
+            return vectors
+        except MODEL_ERRORS:
+            return [None] * len(queries)
+
     async def generate_sql(self, prompt: str) -> str:
         data = await self._post(
             "v1/chat/completions",

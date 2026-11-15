@@ -231,7 +231,7 @@ async def prepare(agent, user, quantity=300, *, key="order-key-123"):
 async def test_buyer_agent_flow():
     async with gateway() as clients:
         agent, user, outsider, _, judge, db = clients
-        assert len(await agent.list_tools()) == 13
+        assert len(await agent.list_tools()) == 14
         intent, order_request = await prepare(agent, user)
         facets = await call(agent, "get_facets")
         assert facets.claims[0].code == "FREE_FROM_LACTOSE"
@@ -422,3 +422,34 @@ async def test_semantic_match_with_no_full_text_overlap(monkeypatch):
         )
         assert [product.product_id for product in result.hits] == [1]
         assert result.hits[0].rrf_score == pytest.approx(1 / 51)
+
+
+async def test_batch_search_returns_one_result_per_query_in_order():
+    async with gateway() as clients:
+        agent, user, _, _, _, _ = clients
+        intent = await call(user, "register_intent", intent_request(40))
+        results = await call(
+            agent,
+            "search_products_batch",
+            {
+                "intent_id": intent.intent_id,
+                "queries": [
+                    {"query_text": "milk", "query_text_alt": "maito", "limit": 5},
+                    {"query_text": "nothingmatchesthis"},
+                    {
+                        "query_text": "alternative milk",
+                        "must": {"claims_all": ["FREE_FROM_LACTOSE"]},
+                        "limit": 1,
+                    },
+                ],
+            },
+        )
+        # The intent requires lactose-free: product 2 is removed from every result.
+        assert [sorted(hit.product_id for hit in result.hits) for result in results] == [[1, 3], [], [1]]
+        assert all(result.sql_source == "template" for result in results)
+        with pytest.raises(ToolError, match="CAP_EXCEEDED"):
+            await call(
+                agent,
+                "search_products_batch",
+                {"intent_id": intent.intent_id, "queries": [{"query_text": "milk"}] * 31},
+            )

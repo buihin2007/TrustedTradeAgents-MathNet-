@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .limits import MAX_OPTIONS
+from .limits import MAX_OPTIONS, MAX_ORDER_LINES
 
 
 class OrderStatus(StrEnum):
@@ -52,7 +52,7 @@ class OrderLineIn(BaseModel):
 class OrderOption(BaseModel):
     model_config = ConfigDict(extra="forbid")
     label: OptionLabel
-    lines: list[OrderLineIn] = Field(min_length=1, max_length=10)
+    lines: list[OrderLineIn] = Field(min_length=1, max_length=MAX_ORDER_LINES)
     explanation: str | None = Field(default=None, max_length=500)
 
 

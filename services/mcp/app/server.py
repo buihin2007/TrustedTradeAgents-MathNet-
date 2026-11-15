@@ -34,6 +34,7 @@ from tta_contracts import (
     PriceAvailabilityResult,
     RegisterIntentRequest,
     RejectOrderRequest,
+    SearchProductsBatchRequest,
     SearchProductsRequest,
     SearchResult,
     SetAgentStatusRequest,
@@ -181,6 +182,23 @@ def create_server(runtime_factory=gateway_runtime) -> FastMCP:
         await state.touch({hit.product_id for hit in result.hits})
         result.flags = [reason.value for reason in state.reasons]
         return result
+
+    @mcp.tool
+    async def search_products_batch(request: SearchProductsBatchRequest) -> list[SearchResult]:
+        """Run up to 30 catalog searches for one intent in a single call; one result per query, same order."""
+        state = current_call.get()
+        results, state.sql = await state.catalog.search_batch(
+            state.conn, request.queries, state.intent.criteria.must
+        )
+        touched = set()
+        for result in results:
+            result.hits = [hit for hit in result.hits if in_scope(hit, state.intent, state.mandate)]
+            touched |= {hit.product_id for hit in result.hits}
+        state.row_count = len(touched)
+        await state.touch(touched)
+        for result in results:
+            result.flags = [reason.value for reason in state.reasons]
+        return results
 
     @mcp.tool
     async def get_price_availability(request: PriceAvailabilityRequest) -> PriceAvailabilityResult:

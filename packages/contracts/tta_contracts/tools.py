@@ -1,4 +1,4 @@
-"""The 13 MCP tools and who may call them. Gate step 3 reads this table."""
+"""The 14 MCP tools and who may call them. Gate step 3 reads this table."""
 from typing import Literal
 
 Caller = Literal["agent", "user"]
@@ -7,6 +7,7 @@ TOOLS: dict[str, tuple[Caller, ...]] = {
     "register_intent": ("user",),
     "get_facets": ("agent",),
     "search_products": ("agent",),
+    "search_products_batch": ("agent",),
     "get_price_availability": ("agent",),
     "get_substitutes": ("agent",),
     "place_order": ("agent",),
@@ -20,7 +21,7 @@ TOOLS: dict[str, tuple[Caller, ...]] = {
 }
 
 # Tools that go through Jev (gate step 7). User tools stop at step 5.
-JEV_READ_TOOLS = {"search_products", "get_price_availability", "get_substitutes"}
+JEV_READ_TOOLS = {"search_products", "search_products_batch", "get_price_availability", "get_substitutes"}
 JEV_WRITE_TOOLS = {"place_order"}
 
 

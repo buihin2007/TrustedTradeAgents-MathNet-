@@ -7,5 +7,5 @@ from .orders import (ApproveOrderRequest, Order, OrderLineIn, OrderOption, Order
 from .pricing import (Offer, PriceAvailabilityRequest, PriceAvailabilityResult, ScheduleLine,
                       SubstituteGroup, SubstitutesRequest)
 from .search import (Criteria, Must, Prefer, ProductHit, Range, Relaxation,
-                     SearchProductsRequest, SearchResult)
+                     SearchProductsBatchRequest, SearchProductsRequest, SearchResult)
 from .tools import JEV_READ_TOOLS, JEV_WRITE_TOOLS, TOOLS, allowed
