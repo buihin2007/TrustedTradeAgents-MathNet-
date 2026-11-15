@@ -1,87 +1,83 @@
 "use client";
 import Link from "next/link";
-import { use, useState } from "react";
-import { OptionCard } from "@/components/OptionCard";
+import { use, useEffect, useRef, useState } from "react";
+import { Baskets, Dishes, OrderLink, Question, Say, Thinking, UserBubble } from "@/components/Chat";
 import { Status } from "@/components/Status";
-import { api, eur, toPriced, useApi } from "@/lib/api";
-import type { RequestDetail } from "@/lib/types";
+import { api, useRequestLive } from "@/lib/api";
+import type { AskItem, FeedItem, StepItem } from "@/lib/types";
 
-const DONE = ["placed", "blocked", "rejected", "failed"];
+type Block = { kind: "steps"; steps: StepItem[] } | { kind: "item"; item: Exclude<FeedItem, StepItem> };
+
+/** Consecutive steps become one "thinking" block; everything else is shown on its own. */
+function blocks(feed: FeedItem[]): Block[] {
+  const out: Block[] = [];
+  for (const item of feed) {
+    const last = out[out.length - 1];
+    if (item.t === "step") {
+      if (last?.kind === "steps") last.steps.push(item);
+      else out.push({ kind: "steps", steps: [item] });
+    } else out.push({ kind: "item", item });
+  }
+  return out;
+}
 
 export default function RequestPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const [stopPolling, setStopPolling] = useState(false);
-  const { data: r, error, reload } = useApi<RequestDetail>(`/requests/${id}`, stopPolling ? undefined : 2000);
-  const [answer, setAnswer] = useState("");
-  if (r && DONE.includes(r.status) && !stopPolling) setStopPolling(true);
+  const { data: r, error } = useRequestLive(id);
+  const [busy, setBusy] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const bottom = useRef<HTMLDivElement>(null);
+  const feed = r?.parsed?.feed ?? [];
+  const size = feed.length;
+  useEffect(() => {
+    bottom.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [size, r?.status]);
 
-  const open = r?.questions.find((q) => q.answer == null) ?? null;
-  const send = async (value: string) => {
-    if (!open) return;
-    await api(`/requests/${id}/answer`, { method: "POST", body: JSON.stringify({ question_id: open.id, answer: value }) });
-    setAnswer("");
-    setStopPolling(false);
-    reload();
+  const answer = async (q: AskItem, values: string[], other: string) => {
+    const labels = values.map((value) => q.options.find((o) => o.value === value)?.label ?? value);
+    const shown = [...labels, other].filter(Boolean).join(", ").slice(0, 1000);
+    setBusy(true);
+    setSendError(null);
+    try {
+      await api(`/requests/${id}/answer`, {
+        method: "POST",
+        body: JSON.stringify({ question_id: q.id, answer: shown, values, other }),
+      });
+    } catch (e) {
+      setSendError(e instanceof Error ? e.message : String(e));
+    }
+    setBusy(false);
   };
 
-  if (error) return <p className="text-human">Could not load request: {error}</p>;
-  if (!r) return <p className="text-neutral-500">Loading...</p>;
-  const chips = Object.entries(r.parsed ?? {}).filter(([, v]) => v != null && v !== "" && !(Array.isArray(v) && !v.length));
+  if (!r) return <p className={error ? "text-human" : "text-neutral-500"}>{error ? `Could not load request: ${error}` : "Loading..."}</p>;
+  const last = feed[feed.length - 1];
+  const waiting = r.status === "running" && !(last?.t === "step" && last.status === "run");
 
   return (
-    <div className="space-y-6">
-      <Link href="/requests" className="text-sm text-neutral-500">← Requests</Link>
-      <div className="flex items-start gap-3">
-        <h1 className="flex-1 text-xl font-semibold">{r.text}</h1>
+    <div className="space-y-4 pb-24">
+      <div className="flex items-center justify-between">
+        <Link href="/requests" className="text-sm text-neutral-500">← Requests</Link>
         <Status value={r.status} />
       </div>
-      {r.status === "running" && <p className="text-sm text-neutral-500">Agent is working: {r.step ?? "starting"}...</p>}
-      {r.error && <p className="text-sm text-human">{r.error}</p>}
-
-      {chips.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {chips.map(([k, v]) => (
-            <span key={k} className="rounded bg-neutral-100 px-2 py-1 text-xs">
-              {k.replaceAll("_", " ")}: {typeof v === "object" ? JSON.stringify(v) : String(v)}
-            </span>
-          ))}
-        </div>
+      <UserBubble>{r.text}</UserBubble>
+      {blocks(feed).map((block, index) => {
+        if (block.kind === "steps") return <Thinking key={index} steps={block.steps} />;
+        const item = block.item;
+        if (item.t === "ask") return <Question key={item.id} q={item} busy={busy} onAnswer={answer} />;
+        if (item.t === "dishes") return <Dishes key={index} item={item} />;
+        if (item.t === "baskets") return <Baskets key={index} item={item} chosen={r.parsed?.choice} />;
+        return <Say key={index} item={item} />;
+      })}
+      {waiting && (
+        <p className="flex items-center gap-2 text-sm text-neutral-500">
+          <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-neutral-300 border-t-auto" />
+          Thinking…
+        </p>
       )}
-
-      {open && r.status === "asking" && (
-        <div className="space-y-3 rounded-lg border border-human/40 bg-human/5 p-4">
-          <p className="font-medium">{open.question}</p>
-          <div className="flex flex-wrap gap-2">
-            {open.choices.map((c) => (
-              <button key={c} onClick={() => send(c)} className="rounded border border-human/40 bg-white px-3 py-1 text-sm hover:bg-human/10">
-                {c}
-              </button>
-            ))}
-          </div>
-          <form onSubmit={(e) => { e.preventDefault(); if (answer.trim()) send(answer); }} className="flex gap-2">
-            <input className="flex-1 rounded border border-neutral-300 px-3 py-1 text-sm" placeholder="Or type your own answer"
-              value={answer} onChange={(e) => setAnswer(e.target.value)} />
-            <button className="rounded bg-human px-3 py-1 text-sm text-white">Send</button>
-          </form>
-        </div>
-      )}
-
-      {r.order && (
-        <div className="rounded-lg border border-neutral-200 bg-white p-4 text-sm">
-          Order <span className="font-mono">{r.order.order_id.slice(0, 8)}</span>: <Status value={r.order.status} />{" "}
-          {r.order.total_eur != null && <>total {eur(r.order.total_eur)}, </>}delivery {r.order.delivery_date}
-          {r.order.reasons.length > 0 && <span className="text-neutral-500"> ({r.order.reasons.join(", ")})</span>}
-          {r.order.status === "held" && <> · <Link href="/approvals" className="text-human underline">Review in Approvals</Link></>}
-        </div>
-      )}
-
-      {(r.order?.options.length || r.options.length) > 0 && (
-        <div className="grid gap-4 md:grid-cols-2">
-          {(r.order?.options ?? r.options.map(toPriced)).map((o, i) => (
-            <OptionCard key={`${o.label}-${i}`} option={o} chosen={r.order?.chosen_index === i} />
-          ))}
-        </div>
-      )}
+      {r.parsed?.order && <OrderLink status={r.parsed.order.status} />}
+      {!r.parsed && r.error && <Say item={{ t: "say", text: r.error, tone: "error" }} />}
+      {sendError && <p className="text-sm text-human">{sendError}</p>}
+      <div ref={bottom} />
     </div>
   );
 }

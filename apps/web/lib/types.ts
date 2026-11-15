@@ -65,10 +65,51 @@ export interface Question {
   answered_at: string | null;
 }
 
+/** One entry of the agent's conversation feed (services/api/app/agent.py). */
+export interface StepItem { t: "step"; title: string; status: "run" | "done" | "fail"; detail: string; items: string[]; ms: number | null }
+export interface AskOption { value: string; label: string; desc: string }
+export interface AskItem {
+  t: "ask"; id: string; field: string; header: string; text: string; options: AskOption[];
+  multi: boolean; hint: string; answer: string | null;
+}
+export interface SayItem { t: "say"; text: string; tone: "info" | "ok" | "warn" | "error" }
+export interface DishCard {
+  name: string; why: string; covered: number; total: number; missing: string[]; swaps: string[];
+  per_person: string | null; ingredients: string[]; pantry: string[]; line: string;
+}
+export interface DishesItem { t: "dishes"; dishes: DishCard[]; headcount: number; date: string }
+export interface BasketLine {
+  product_id: number; name: string; units: number; sales_unit: string; pack: string; unit_price: string;
+  line_total: string; need: string; amount: string; note: string; reliability: number | null; dishes: string[];
+}
+export interface Basket {
+  label: OptionLabel; title: string; total: string; lines: BasketLine[];
+  missing: { need: string; essential: boolean; reason: string; earliest: string | null }[];
+  gate: "auto" | "approval" | "blocked" | "unknown"; gate_note: string; explanation: string;
+}
+export interface BasketsItem { t: "baskets"; baskets: Basket[]; pantry: string[]; date: string }
+export type FeedItem = StepItem | AskItem | SayItem | DishesItem | BasketsItem;
+
+export interface AgentState {
+  v: number;
+  feed: FeedItem[];
+  choice?: number | "cancel";
+  order?: { order_id: string; status: string; reasons: string[]; total: string; delivery_date: string };
+}
+
+/** GET /api/requests/{id} and every event of GET /api/requests/{id}/stream. */
+export interface RequestLive {
+  id: string;
+  text: string;
+  status: RequestStatus;
+  step: string | null;
+  error: string | null;
+  parsed: AgentState | null;
+  created_at: string;
+}
+
 export interface RequestDetail extends RequestSummary {
-  parsed: Record<string, unknown> | null;   // ParsedRequest from the LLM: shown as chips
-  options: (PricedOption | OptionPreview)[];
-  questions: Question[];                     // the open one has answer = null (status "asking")
+  parsed: AgentState | null;
   order: Order | null;
   error: string | null;
   trace_id: string | null;

@@ -1,5 +1,5 @@
 "use client";
-import type { OptionPreview, PricedOption } from "./types";
+import type { OptionPreview, PricedOption, RequestLive } from "./types";
 import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 
@@ -56,4 +56,74 @@ export function toPriced(o: PricedOption | OptionPreview): PricedOption {
     explanation: o.option.explanation,
     reasons: [],
   };
+}
+
+const FINAL = ["placed", "held", "blocked", "rejected", "failed"];
+
+/**
+ * Live view of one request: server-sent snapshots from /stream, with 1 s polling as a fallback
+ * (dev proxy, old browser, dropped connection). Stops when the request reaches a final status.
+ */
+export function useRequestLive(id: string) {
+  const [data, setData] = useState<RequestLive | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let stopped = false;
+    const controller = new AbortController();
+    const finished = (status?: string) => !!status && FINAL.includes(status);
+    const poll = async () => {
+      while (!stopped) {
+        try {
+          const next = await api<RequestLive>(`/requests/${id}`);
+          if (stopped) return;
+          setData(next);
+          setError(null);
+          if (finished(next.status)) return;
+        } catch (e) {
+          if (!stopped) setError(e instanceof Error ? e.message : String(e));
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    };
+    (async () => {
+      let last: RequestLive | null = null;
+      try {
+        const { data: auth } = await createClient().auth.getSession();
+        const res = await fetch(`/api/requests/${id}/stream`, {
+          headers: auth.session ? { Authorization: `Bearer ${auth.session.access_token}` } : {},
+          signal: controller.signal,
+        });
+        if (!res.ok || !res.body) throw new Error(String(res.status));
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let cut = buffer.indexOf("\n\n");
+          while (cut >= 0) {
+            const line = buffer.slice(0, cut).split("\n").find((l) => l.startsWith("data: "));
+            buffer = buffer.slice(cut + 2);
+            if (line) {
+              last = JSON.parse(line.slice(6)) as RequestLive;
+              if (!stopped) {
+                setData(last);
+                setError(null);
+              }
+            }
+            cut = buffer.indexOf("\n\n");
+          }
+        }
+      } catch {
+        // fall through to polling
+      }
+      if (!stopped && !finished(last?.status)) await poll();
+    })();
+    return () => {
+      stopped = true;
+      controller.abort();
+    };
+  }, [id]);
+  return { data, error };
 }

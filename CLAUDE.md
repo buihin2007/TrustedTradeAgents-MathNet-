@@ -8,6 +8,8 @@ A login app for a buyer (F&B manager) on top of Valio Aimo's MCP gateway.
 
 - `web` (Next.js) -> `api` (FastAPI, buyer side) -> `nginx` -> `mcp` (FastMCP, Valio Aimo gateway) -> Supabase Postgres + Valio mock API.
 - The purchasing agent is a fixed pipeline inside `api`. The LLM only parses the request and writes explanations. Code makes every decision.
+- Buyer agent (`services/api/app/agent.py`): one LLM call understands the request (products or menu) while Jev screens it; code asks one multiple-choice question at a time (people, date, quantity, dishes, basket); menus get recipes from the LLM, checked against Valio stock; sourcing is `register_intent` (user JWT) + `search_products_batch` + `get_price_availability`; baskets are computed in code; the buyer picks one and the gateway decides placed / held / blocked.
+- The agent publishes every step to the browser over `GET /api/requests/{id}/stream` (SSE, whole-snapshot events); the state lives in `buyer.requests.parsed` (`feed` of steps, questions, dish cards, baskets).
 - Jev screens the buyer's first message in `api` (spam / small talk -> request rejected, no LLM parse, no gateway call). Fails open if Jev is down.
 - Every agent tool call passes the Gate in `mcp`: identity, mandate, caps, order policy. Outcomes: placed / held / blocked. Per-call Jev in the gate is opt-in (`GATEWAY_JEV=1`).
 
