@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from .clarify import _UNITS
 from .config import Settings
+from .telemetry import io
 
 tracer = trace.get_tracer("tta.api")
 CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -274,6 +275,13 @@ class Brain:
         """Jev probability that the message is a purchasing request; None when Jev is unavailable."""
         if not self.settings.openrouter_api_key or not self.settings.jev_model:
             return None
+        with self.tracer.start_as_current_span("jev.screen", record_exception=False) as span:
+            score = await self._screen(text)
+            io(span, input={"message": text, "question": SCREEN_QUESTION}, output={"noul": score},
+               **{"langfuse.observation.type": "generation", "gen_ai.request.model": self.settings.jev_model})
+            return score
+
+    async def _screen(self, text: str) -> float | None:
         try:
             async with asyncio.timeout(4):
                 response = await self.client.post(
@@ -323,11 +331,22 @@ class Brain:
                             continue
                         response.raise_for_status()
                         result = response.json()
-                        data = extract_json(result["choices"][0]["message"]["content"])
-                        span.set_attribute("gen_ai.request.model", model)
-                        for key in ("prompt_tokens", "completion_tokens"):
-                            if isinstance(result.get("usage", {}).get(key), int):
-                                span.set_attribute(f"gen_ai.usage.{key}", result["usage"][key])
+                        content = result["choices"][0]["message"]["content"]
+                        data = extract_json(content)
+                        usage = result.get("usage") or {}
+                        io(
+                            span,
+                            input=payload["messages"],
+                            output=content,
+                            **{
+                                "langfuse.observation.type": "generation",
+                                "gen_ai.request.model": model,
+                                "gen_ai.response.model": result.get("model"),
+                                "langfuse.observation.usage_details": json.dumps(
+                                    {"input": usage.get("prompt_tokens", 0), "output": usage.get("completion_tokens", 0)}
+                                ),
+                            },
+                        )
                         return data
                     except (httpx.HTTPError, TimeoutError, ValueError, KeyError, IndexError, TypeError) as exc:
                         problem = type(exc).__name__

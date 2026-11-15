@@ -44,6 +44,7 @@ from tta_contracts import (
 from tta_contracts import (
     ReasonCode as Reason,
 )
+from tta_contracts.telemetry import langfuse_otel_env
 
 from search.catalog import Catalog, substitutes
 
@@ -54,7 +55,6 @@ from .gate import Gate, current_call
 from .openrouter import OpenRouter
 from .policy import in_scope
 from .valio import ValioClient
-from tta_contracts.telemetry import langfuse_otel_env
 
 DEFAULT_LIMITS = MandateLimits()
 

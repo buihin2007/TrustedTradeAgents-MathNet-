@@ -9,6 +9,7 @@ from email.utils import parsedate_to_datetime
 import httpx
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
+from opentelemetry import trace
 from opentelemetry.propagate import inject
 from pydantic import TypeAdapter, ValidationError
 from tta_contracts import ReasonCode
@@ -16,6 +17,9 @@ from tta_contracts.tools import allowed
 
 from .auth import Identity
 from .config import Settings
+from .telemetry import io
+
+tracer = trace.get_tracer("tta.api")
 
 
 class GatewayUnavailable(Exception):
@@ -101,6 +105,22 @@ class GatewaySession:
         self.contexts = {}
 
     async def call(self, tool: str, arguments: dict, result_type, *, actor="agent"):
+        with tracer.start_as_current_span(f"mcp.{tool}", record_exception=False) as span:
+            io(span, input=arguments, **{"mcp.tool": tool, "mcp.actor": actor})
+            try:
+                result = await self._call(tool, arguments, result_type, actor=actor)
+            except GatewayDenied as exc:
+                io(span, output={"denied": exc.reason.value if exc.reason else None})
+                raise
+            except GatewayUnavailable as exc:
+                io(span, output={"unavailable": str(exc)})
+                raise
+            data = TypeAdapter(result_type).dump_python(result, mode="json")
+            text = json.dumps(data, ensure_ascii=False, default=str)
+            io(span, output=text if len(text) <= 20000 else text[:19000] + "…")
+            return result
+
+    async def _call(self, tool: str, arguments: dict, result_type, *, actor="agent"):
         if not allowed(tool, actor):
             raise GatewayDenied(ReasonCode.FORBIDDEN)
         token = self.user.token if actor == "user" else self.settings.agent_key

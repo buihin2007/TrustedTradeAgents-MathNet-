@@ -1,5 +1,6 @@
 """Per-app tracing, with opt-in Langfuse export and no token/prompt attributes."""
 
+import json
 import os
 
 from opentelemetry import trace
@@ -27,3 +28,22 @@ def create_provider():
 def current_trace_id():
     context = trace.get_current_span().get_span_context()
     return f"{context.trace_id:032x}" if context.is_valid else None
+
+
+def capture() -> bool:
+    """Send inputs/outputs (buyer text, prompts, tool arguments) to Langfuse. TRACE_CONTENT=0 turns it off.
+    Tokens and keys are never attached."""
+    return os.getenv("TRACE_CONTENT", "1") != "0"
+
+
+def io(span, input=None, output=None, **attributes) -> None:
+    """Set Langfuse input/output (JSON, at most 20 kB each) and plain attributes on a span."""
+    for key, value in attributes.items():
+        if value is not None:
+            span.set_attribute(key, value)
+    if not capture():
+        return
+    for key, value in (("langfuse.observation.input", input), ("langfuse.observation.output", output)):
+        if value is not None:
+            text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+            span.set_attribute(key, text[:20000])

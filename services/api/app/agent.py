@@ -47,7 +47,7 @@ from .sourcing import (
     needs_from_items,
     pick,
 )
-from .telemetry import current_trace_id
+from .telemetry import current_trace_id, io
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer("tta.api")
@@ -203,15 +203,17 @@ class Run:
         self.feed.append(item)
         self.push(title)
         started = monotonic()
-        try:
-            yield item
-            item["status"] = "done"
-        except BaseException:
-            item["status"] = "fail"
-            raise
-        finally:
-            item["ms"] = int((monotonic() - started) * 1000)
-            self.push()
+        with self.agent.tracer.start_as_current_span(f"step: {title}", record_exception=False) as span:
+            try:
+                yield item
+                item["status"] = "done"
+            except BaseException:
+                item["status"] = "fail"
+                raise
+            finally:
+                item["ms"] = int((monotonic() - started) * 1000)
+                io(span, output={"status": item["status"], "detail": item["detail"], "items": item["items"]})
+                self.push()
 
     def say(self, text: str, tone: str = "info") -> None:
         self.feed.append({"t": "say", "text": text, "tone": tone})
@@ -319,6 +321,9 @@ class Agent:
         with self.tracer.start_as_current_span("request.pipeline", record_exception=False) as span:
             span.set_attribute("langfuse.session.id", str(request_id))
             span.set_attribute("langfuse.user.id", str(profile.user_id))
+            span.set_attribute("langfuse.trace.name", "buyer request")
+            last = request.questions[-1] if request.questions and request.questions[-1].answer else None
+            io(span, input={"request": request.text, "answer": decode(last.answer)[2] if last else None})
             run.trace_id = run.trace_id or current_trace_id()
             try:
                 async with self.gateway.session(user) as gateway:
@@ -341,6 +346,9 @@ class Agent:
                 logger.exception("agent run failed")
                 await run.finish("failed", "Something went wrong on our side. Please try again.", "error")
             finally:
+                said = next((item["text"] for item in reversed(run.feed) if item["t"] == "say"), None)
+                asked = run.question["text"] if run.question else None
+                io(span, output={"status": run.status, "question": asked, "message": said, "error": run.error})
                 await run.flush()
 
     # ------------------------------------------------------------------ cached lookups

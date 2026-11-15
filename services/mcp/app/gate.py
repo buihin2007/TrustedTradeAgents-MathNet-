@@ -1,7 +1,8 @@
 """FastMCP middleware for authorization, hard limits, Jev and durable audit."""
 
-import os
+import json
 import logging
+import os
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from time import monotonic
@@ -336,6 +337,19 @@ class Gate(Middleware):
                     state.reasons = list(dict.fromkeys([*state.reasons, Reason(str(error))]))
             span.set_attribute("gate.tool", tool)
             span.set_attribute("gate.decision", state.decision.value)
+            if os.getenv("TRACE_CONTENT", "1") != "0":
+                span.set_attribute("langfuse.observation.input", json.dumps({"tool": tool, "arguments": args}, default=str)[:20000])
+                span.set_attribute(
+                    "langfuse.observation.output",
+                    json.dumps(
+                        {
+                            "decision": state.decision.value,
+                            "reasons": [reason.value for reason in state.reasons],
+                            "rows": state.row_count,
+                            "error": str(error) if error is not None else None,
+                        }
+                    ),
+                )
             span.set_attribute("gate.reasons", [reason.value for reason in state.reasons])
             if state.intent_id:
                 span.set_attribute("gate.intent_id", str(state.intent_id))

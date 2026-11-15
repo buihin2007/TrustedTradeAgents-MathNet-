@@ -1,5 +1,6 @@
 import json
 
+import pytest
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -12,7 +13,9 @@ from tests.factories import PROFILE, USER_ID, FakeGateway, FakeLLM, MemoryStore
 from tests.test_gateway import StubClient
 
 
-async def test_pipeline_spans_and_audit_share_trace_without_tokens_or_prompts():
+@pytest.mark.parametrize("content", ["1", "0"])
+async def test_pipeline_spans_and_audit_share_trace_without_tokens_or_prompts(monkeypatch, content):
+    monkeypatch.setenv("TRACE_CONTENT", content)
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
@@ -32,7 +35,8 @@ async def test_pipeline_spans_and_audit_share_trace_without_tokens_or_prompts():
     assert all(span.context.trace_id == pipeline.context.trace_id for span in spans)
     attributes = json.dumps([dict(span.attributes) for span in spans])
     assert "private-user-jwt" not in attributes
-    assert "private buyer wording" not in attributes
+    assert ("private buyer wording" in attributes) == (content == "1")
+    assert pipeline.attributes["langfuse.trace.name"] == "buyer request"
     provider.shutdown()
 
 
