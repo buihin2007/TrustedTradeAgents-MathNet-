@@ -27,6 +27,12 @@ def money(value) -> Decimal:
     return amount
 
 
+def local_day(value: str) -> date:
+    """A schedule date as a Helsinki calendar day; UTC timestamps of local midnight fall on the day before."""
+    moment = datetime.fromisoformat(value)
+    return (moment.astimezone(HELSINKI) if moment.tzinfo else moment).date()
+
+
 def parse_offer(product_id: int, day: date, price: dict, stock: dict, now: datetime) -> Offer:
     catalog = price.get("catalogPrice")
     if not catalog or price.get("error") is not False or price.get("quantity") != 1:
@@ -41,7 +47,7 @@ def parse_offer(product_id: int, day: date, price: dict, stock: dict, now: datet
         schedule.append(
             ScheduleLine(
                 available_amount=amount,
-                available_date=datetime.fromisoformat(line["availableDate"]).date(),
+                available_date=local_day(line["availableDate"]),
                 sales_unit=line["salesUnit"],
                 sales_block="blocked" if line["salesBlock"] else None,
             )
@@ -51,15 +57,16 @@ def parse_offer(product_id: int, day: date, price: dict, stock: dict, now: datet
     cutoff = datetime.fromisoformat(closing) if closing else None
     if cutoff is not None and cutoff.tzinfo is None:
         cutoff = cutoff.replace(tzinfo=HELSINKI)
-    blocked = stock["salesBlock"] or (cutoff is not None and now >= cutoff)
-    available = max(
-        (
-            line.available_amount
-            for line in schedule
-            if line.available_date == day and line.sales_block is None
-        ),
-        default=0,
+    late = cutoff is not None and now >= cutoff
+    blocked = stock["salesBlock"] or late
+    # A schedule line says how much is available FROM its date: the latest line on or before the
+    # delivery day applies (exact-date matching reported 0 for everything).
+    current = max(
+        (line for line in schedule if line.available_date <= day),
+        key=lambda line: line.available_date,
+        default=None,
     )
+    available = current.available_amount if current is not None and current.sales_block is None else 0
     comparison = price.get("comparisonPrice")
     with_tax = price.get("priceWithTax")
     return Offer(
@@ -71,7 +78,7 @@ def parse_offer(product_id: int, day: date, price: dict, stock: dict, now: datet
         logistic_model=stock.get("logisticModel"),
         available_on_date=0 if blocked else available,
         schedule=schedule,
-        sales_block="blocked" if stock["salesBlock"] else None,
+        sales_block="blocked" if stock["salesBlock"] else "cutoff" if late else None,
         closing_time=cutoff,
     )
 

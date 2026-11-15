@@ -140,11 +140,29 @@ def size_of(hit: ProductHit, unit: str) -> Decimal | None:
     return Decimal(str(value)) if value and value > 0 else None
 
 
+GENERIC = {
+    "fresh", "frozen", "whole", "sliced", "diced", "cooked", "smoked", "boneless", "organic", "large", "small",
+    "cut", "cubes", "cube", "pieces", "raw", "dried", "ground", "minced", "peeled", "red", "green", "white",
+    "black", "yellow", "with", "and", "for", "the", "plain", "natural", "finnish", "skinless", "chopped",
+}
+
+
+def core(text: str | None) -> list[str]:
+    return [w for w in re.findall(r"[a-zäöå]{3,}", norm(text or "")) if w not in GENERIC]
+
+
 def relevant(hit: ProductHit, need: Need) -> bool:
-    """Cheap lexical sanity check: one word of the need must appear in the product's name or category."""
-    text = norm(" ".join(filter(None, [hit.name_en, hit.name_fi, hit.category_name])))
-    words = re.findall(r"[a-zäöå]{3,}", norm(" ".join(filter(None, [need.name, need.search_en, need.search_fi]))))
-    return any(word[:5] in text for word in words) if words else True
+    """The product must name the ingredient: its head noun plus most of the other words (English), or
+    the Finnish word. Keeps "Werther's cream candies" out of sour cream and air freshener out of rutabaga."""
+    en = norm(" ".join(filter(None, [hit.name_en, hit.category_name])))
+    fi = norm(hit.name_fi or "")
+    words = core(need.search_en) or core(need.name)
+    if words:
+        hits = [w for w in words if w[:5] in en]
+        if words[-1][:5] in en and len(hits) >= (len(words) + 2) // 2:
+            return True
+    finnish = core(need.search_fi)
+    return bool(finnish) and all(w[:5] in fi for w in finnish[-2:])
 
 
 def pick(needs: list[Need], hits: dict[str, list[ProductHit]], cap: int = 50):
@@ -156,7 +174,7 @@ def pick(needs: list[Need], hits: dict[str, list[ProductHit]], cap: int = 50):
     ids: list[int] = []
     for need in primaries + alternatives:
         usable = [hit for hit in hits.get(need.ref, []) if size_of(hit, need.unit)]
-        good = [hit for hit in usable if relevant(hit, need)] or usable[:1]
+        good = [hit for hit in usable if relevant(hit, need)]
         chosen[need.ref] = good[: 1 if need.alt_of else per_need]
         ids += [hit.product_id for hit in chosen[need.ref] if hit.product_id not in ids]
     return chosen, ids[:cap]
@@ -167,7 +185,7 @@ def candidates(need: Need, hits: list[ProductHit], offers: dict[int, Offer]) -> 
     for rank, hit in enumerate(hits):
         offer = offers.get(hit.product_id)
         size = size_of(hit, need.unit)
-        if not offer or offer.error or offer.sales_block or offer.unit_price_eur is None or size is None:
+        if not offer or offer.error or offer.sales_block == "blocked" or offer.unit_price_eur is None or size is None:
             continue
         lot = Decimal(str(hit.allowed_lot_size)) if hit.allowed_lot_size and hit.allowed_lot_size > 0 else Decimal(1)
         # Cartons and packs are whole units even when the catalog allows 0.01 lots.
@@ -225,7 +243,12 @@ def resolve(need: Need, alt: Need | None, pool: dict[str, list[Candidate]], stra
         short = replace(partial, units=units, cost=(partial.offer.unit_price_eur * units).quantize(CENT))
         return short, f"Only {qty(units)} of {qty(partial.units)} units in stock that day", None
     when = earliest(options, day)
-    reason = "no matching product in the catalog" if not options else "not in stock on that date"
+    if not options:
+        reason = "no matching product in the catalog"
+    elif all(option.offer.sales_block == "cutoff" for option in options):
+        reason = "the order cut-off for that date has passed"
+    else:
+        reason = "not in stock on that date"
     return None, "", {"need": need.name, "essential": need.essential, "reason": reason,
                       "earliest": when.isoformat() if when else None}
 
@@ -309,7 +332,7 @@ def dish_cards(dishes: list[Dish], headcount: int, chosen: dict, offers: dict, d
                     swaps.append(note)
             if found is not None:
                 cost += found.cost
-        per_person = (cost / headcount).quantize(CENT) if headcount else None
+        per_person = (cost / headcount).quantize(CENT) if headcount and cost else None
         stock = (
             f"all {len(primaries)} ingredients in stock"
             if not absent

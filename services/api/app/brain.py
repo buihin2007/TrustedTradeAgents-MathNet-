@@ -357,6 +357,8 @@ class Brain:
         diet: list[str],
         avoid: list[str],
         language: str,
+        exclude: list[str] = (),
+        unavailable: list[str] = (),
     ) -> list[Dish]:
         """Recipes for the named dishes, or `count` suggestions when none are named."""
         if dishes:
@@ -371,6 +373,10 @@ class Brain:
             constraints.append("No ingredient may contain: " + ", ".join(avoid) + ".")
         if diet:
             constraints.append("Diet: " + ", ".join(d.replace("_", " ") for d in diet) + ".")
+        if exclude:
+            constraints.append("Do not suggest these dishes again: " + ", ".join(exclude) + ".")
+        if unavailable:
+            constraints.append("These ingredients are out of stock, do not use them: " + ", ".join(unavailable) + ".")
         system = RECIPE_PROMPT.format(
             task=task,
             language=language,

@@ -266,6 +266,7 @@ class Agent:
         self.active: dict[UUID, asyncio.Task] = {}
         self.recipe_tasks: dict[UUID, tuple[str, asyncio.Task]] = {}
         self.sourced: dict[UUID, dict] = {}
+        self.exclusions: dict[UUID, tuple[list[str], list[str]]] = {}
         self.facets_cache: tuple[float, dict, dict] | None = None
         self.mandates: dict[str, tuple[float, Mandate]] = {}
 
@@ -368,7 +369,8 @@ class Agent:
     def speculate(self, request_id: UUID, plan: Plan) -> asyncio.Task:
         """Start (or reuse) the recipe call. Started early so it runs while the buyer answers questions."""
         labels = self.facets_cache[1] if self.facets_cache else {}
-        signature = json.dumps([plan.dishes, plan.theme, plan.diet, plan.avoid_allergens, plan.meal])
+        excluded = self.exclusions.get(request_id, ([], []))
+        signature = json.dumps([plan.dishes, plan.theme, plan.diet, plan.avoid_allergens, plan.meal, excluded])
         current = self.recipe_tasks.get(request_id)
         if current and current[0] == signature:
             task = current[1]
@@ -385,6 +387,8 @@ class Agent:
                 diet=plan.diet,
                 avoid=[labels.get(code) or code for code in plan.avoid_allergens],
                 language=plan.language,
+                exclude=excluded[0],
+                unavailable=excluded[1],
             )
         )
         task.add_done_callback(lambda done: done.cancelled() or done.exception())
@@ -498,6 +502,8 @@ class Agent:
                 day = None
             day = day or parse_date(other, today)
             if day and day >= today:
+                if day != plan.delivery_date:
+                    self.reset_sourcing(run)  # a new date needs a new intent, quote and stock check
                 plan.delivery_date, understood = day, True
         elif field.startswith("quantity:"):
             index = int(field.split(":")[1])
@@ -509,6 +515,14 @@ class Agent:
                     (item.quantity, item.unit), understood = found, True
                 elif item.unit and number:
                     item.quantity, understood = number, True
+        elif field == "dishes" and "more" in values:
+            menu = state.pop("menu", None) or {}
+            shown = [dish["name"] for dish in menu.get("dishes", [])]
+            old_names, old_missing = self.exclusions.get(run.request.id, ([], []))
+            self.exclusions[run.request.id] = (old_names + shown, sorted(set(old_missing) | set(state.pop("missing", []))))
+            self.reset_sourcing(run)
+            self.speculate(run.request.id, plan)
+            understood = True
         elif field == "dishes":
             menu = state.get("menu") or {}
             picked = [name for name in values if name in [dish["name"] for dish in menu.get("dishes", [])]]
@@ -583,8 +597,23 @@ class Agent:
         sourced = await self.source(run, plan)
         day, menu = plan.delivery_date, state.get("menu")
         dishes = sourced["dishes"]
+        offers = sourced["offers"].values()
+        if offers and not any((offer.available_on_date or 0) > 0 for offer in offers):
+            cutoff = any(offer.sales_block == "cutoff" for offer in offers)
+            plan.delivery_date = None
+            state["plan"] = plan.model_dump(mode="json")
+            self.reset_sourcing(run)
+            run.say(
+                f"Valio Aimo reports no stock for any of these products on {fmt_day(day, today)}"
+                + (" because the order cut-off has passed." if cutoff else ".")
+                + " Pick another delivery date.",
+                "warn",
+            )
+            await self.ask(run, **slot_question(plan, today))
+            return
         if menu is not None and menu.get("selected") is None:
             cards = dish_cards(dishes, plan.headcount, sourced["chosen"], sourced["offers"], day, sourced["dairy"])
+            state["missing"] = sorted({name for card in cards for name in card["missing"]})
             run.feed.append({"t": "dishes", "dishes": cards, "headcount": plan.headcount, "date": day.isoformat()})
             run.audit("menu.suggested", f"{len(cards)} dishes suggested from Valio Aimo stock",
                       details={"dishes": [card["name"] for card in cards]})
@@ -593,7 +622,13 @@ class Agent:
                 "dishes",
                 "Menu",
                 f"Which dishes should I source for {plan.headcount} people on {fmt_day(day, today)}?",
-                [{"value": card["name"], "label": card["name"], "desc": card["line"]} for card in cards],
+                [{"value": card["name"], "label": card["name"], "desc": card["line"]} for card in cards]
+                + (
+                    [{"value": "more", "label": "Suggest other dishes",
+                      "desc": "Avoids the ingredients that are not in stock that day"}]
+                    if any(card["missing"] for card in cards)
+                    else []
+                ),
                 multi=True,
                 hint="Or name another dish",
             )

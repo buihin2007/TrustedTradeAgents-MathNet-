@@ -65,4 +65,18 @@ def test_past_cutoff_and_wrong_date_are_unavailable():
         parse_offer(1, DAY, PRICE, {**STOCK, "closingTime": "2097-01-01"}, now).available_on_date
         == 0
     )
-    assert parse_offer(1, date(2099, 1, 2), PRICE, STOCK, now).available_on_date == 0
+    assert parse_offer(1, date(2098, 12, 31), PRICE, STOCK, now).available_on_date == 0
+
+
+def test_schedule_line_applies_from_its_date_and_utc_midnight_is_local():
+    now = datetime(2098, 1, 1, tzinfo=UTC)
+    assert parse_offer(1, date(2099, 1, 5), PRICE, STOCK, now).available_on_date == 40
+    lines = [
+        {"availableAmount": 5, "availableDate": "2098-12-31T22:00:00Z", "salesUnit": "ST", "salesBlock": False},
+        {"availableAmount": 90, "availableDate": "2099-01-03T22:00:00+00:00", "salesUnit": "ST", "salesBlock": False},
+    ]
+    stock = {**STOCK, "scheduleLines": lines}
+    assert parse_offer(1, date(2099, 1, 1), PRICE, stock, now).available_on_date == 5
+    assert parse_offer(1, date(2099, 1, 4), PRICE, stock, now).available_on_date == 90
+    late = parse_offer(1, DAY, PRICE, {**STOCK, "closingTime": "2097-01-01"}, now)
+    assert late.sales_block == "cutoff" and late.available_on_date == 0

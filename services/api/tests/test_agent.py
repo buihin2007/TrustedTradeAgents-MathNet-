@@ -176,8 +176,11 @@ async def test_out_of_stock_item_shows_the_earliest_date_and_delivery_can_move_t
 
     def search(arguments):
         return [
-            SearchResult(query_id="q", criteria_shape="", sql_source="template", hits=[hit(index + 1)])
-            for index, _ in enumerate(arguments["queries"])
+            SearchResult(
+                query_id="q", criteria_shape="", sql_source="template",
+                hits=[hit(index + 1, name_en=query["query_text"])],
+            )
+            for index, query in enumerate(arguments["queries"])
         ]
 
     items = [
@@ -209,8 +212,11 @@ async def test_recipe_alternative_is_used_when_the_ingredient_is_out_of_stock():
 
     def search(arguments):
         return [
-            SearchResult(query_id="q", criteria_shape="", sql_source="template", hits=[hit(index + 1)])
-            for index, _ in enumerate(arguments["queries"])
+            SearchResult(
+                query_id="q", criteria_shape="", sql_source="template",
+                hits=[hit(index + 1, name_en=query["query_text"])],
+            )
+            for index, query in enumerate(arguments["queries"])
         ]
 
     gateway = FakeGateway(
@@ -245,3 +251,43 @@ async def test_gateway_denial_and_model_failure_end_with_a_plain_message():
     request = await Session(llm=llm).start()
     assert request.status == "failed" and "language model" in request.error
     assert [item["status"] for item in request.parsed["feed"] if item["t"] == "step"] == ["done", "fail"]
+
+
+async def test_nothing_in_stock_asks_for_another_date_instead_of_suggesting_dishes():
+    gateway = FakeGateway(
+        get_price_availability=lambda arguments: PriceAvailabilityResult(
+            quote_id="q",
+            delivery_date=date.fromisoformat(arguments["delivery_date"]),
+            quoted_at=datetime.now(UTC),
+            offers=[offer(1, available_on_date=0 if arguments["delivery_date"] == DELIVERY.isoformat() else 500)],
+        )
+    )
+    llm = FakeLLM(plan=Plan(kind="menu", headcount=50, delivery_date=DELIVERY), dishes=[soup()])
+    s = Session(llm=llm, gateway=gateway, text="dinner for 50")
+    await s.start()
+    assert s.question["field"] == "delivery_date"
+    assert "no stock" in next(item for item in s.feed if item["t"] == "say")["text"]
+    assert not any(item["t"] == "dishes" for item in s.feed)
+    await s.answer(values=[(DELIVERY + timedelta(days=1)).isoformat()])
+    assert s.question["field"] == "dishes"
+    assert len(s.calls("register_intent")) == 2
+
+
+async def test_suggest_other_dishes_avoids_what_was_missing():
+    def search(arguments):
+        return [
+            SearchResult(
+                query_id="q", criteria_shape="", sql_source="template",
+                hits=[] if "salmon" in query["query_text"] else [hit(1, name_en=query["query_text"])],
+            )
+            for query in arguments["queries"]
+        ]
+
+    llm = FakeLLM(plan=Plan(kind="menu", headcount=50, delivery_date=DELIVERY), dishes=[soup()])
+    s = Session(llm=llm, gateway=FakeGateway(search_products_batch=search), text="dinner for 50")
+    await s.start()
+    assert s.question["options"][-1]["value"] == "more"
+    await s.answer(values=["more"], text="Suggest other dishes")
+    assert llm.recipe_calls[-1]["exclude"] == ["Salmon soup"]
+    assert llm.recipe_calls[-1]["unavailable"] == ["salmon fillet"]
+    assert s.question["field"] == "dishes"

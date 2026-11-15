@@ -297,8 +297,13 @@ class FakeGateway:
             ),
             "search_products": SearchResult(query_id="query", criteria_shape="", sql_source="template", hits=[hit()]),
             "search_products_batch": lambda arguments: [
-                SearchResult(query_id="query", criteria_shape="", sql_source="template", hits=[hit()])
-                for _ in arguments["queries"]
+                SearchResult(
+                    query_id="query",
+                    criteria_shape="",
+                    sql_source="template",
+                    hits=[hit(name_en=query["query_text"], name_fi=query.get("query_text_alt"))],
+                )
+                for query in arguments["queries"]
             ],
             "get_mandate": Mandate(
                 mandate_id="m",
