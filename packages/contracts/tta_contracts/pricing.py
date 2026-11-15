@@ -1,5 +1,6 @@
 """get_price_availability and get_substitutes."""
-from datetime import date, datetime
+import json
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Literal
 
@@ -42,6 +43,33 @@ class PriceAvailabilityResult(BaseModel):
     delivery_date: date
     quoted_at: datetime
     offers: list[Offer]
+    valid_until: datetime | None = None   # after this the gateway holds an order built on this quote
+    key_id: str | None = None             # kid of the signing key in /.well-known/jwks.json
+    signature: str | None = None          # base64url Ed25519 signature over quote_signing_bytes(self)
+
+
+def quote_signing_bytes(quote: "PriceAvailabilityResult") -> bytes:
+    """Canonical bytes Valio Aimo signs for a quote: what was quoted, for which day, until when.
+
+    JSON with sorted keys and no whitespace; prices as decimal strings, stock as numbers.
+    Any agent can recompute these bytes from the tool result and verify the signature
+    against the public key published at /.well-known/jwks.json.
+    """
+    body = {
+        "quote_id": quote.quote_id,
+        "delivery_date": quote.delivery_date.isoformat(),
+        "valid_until": quote.valid_until.astimezone(UTC).isoformat() if quote.valid_until else None,
+        "offers": [
+            {
+                "product_id": offer.product_id,
+                "unit_price_eur": str(offer.unit_price_eur) if offer.unit_price_eur is not None else None,
+                "available_on_date": offer.available_on_date,
+                "sales_block": offer.sales_block,
+            }
+            for offer in sorted(quote.offers, key=lambda offer: offer.product_id)
+        ],
+    }
+    return json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
 
 
 class SubstitutesRequest(BaseModel):

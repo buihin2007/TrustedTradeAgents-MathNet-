@@ -5,7 +5,7 @@ from .intent import (CodeLabel, Facets, Intent, Mandate, MandateLimits, Register
 from .orders import (ApproveOrderRequest, Order, OrderLineIn, OrderOption, OrderStatus,
                      PlaceOrderRequest, PricedLine, PricedOption, ReasonCode, RejectOrderRequest)
 from .pricing import (Offer, PriceAvailabilityRequest, PriceAvailabilityResult, ScheduleLine,
-                      SubstituteGroup, SubstitutesRequest)
+                      SubstituteGroup, SubstitutesRequest, quote_signing_bytes)
 from .search import (Criteria, Must, Prefer, ProductHit, Range, Relaxation,
                      SearchProductsBatchRequest, SearchProductsRequest, SearchResult)
 from .tools import JEV_READ_TOOLS, JEV_WRITE_TOOLS, TOOLS, allowed

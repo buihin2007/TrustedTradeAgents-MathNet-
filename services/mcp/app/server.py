@@ -40,6 +40,7 @@ from tta_contracts import (
     SetAgentStatusRequest,
     SubstituteGroup,
     SubstitutesRequest,
+    quote_signing_bytes,
 )
 from tta_contracts import (
     ReasonCode as Reason,
@@ -53,7 +54,9 @@ from .auth import SupabaseJWT
 from .db import all_rows, json_model, mandate_for, one, order_for, uuid
 from .gate import Gate, current_call
 from .openrouter import OpenRouter
+from .orders import QUOTE_TTL
 from .policy import in_scope
+from .signing import signer
 from .valio import ValioClient
 
 DEFAULT_LIMITS = MandateLimits()
@@ -126,6 +129,11 @@ def create_server(runtime_factory=gateway_runtime) -> FastMCP:
         middleware=[Gate()],
         mask_error_details=True,
     )
+
+    @mcp.custom_route("/.well-known/jwks.json", methods=["GET"])
+    async def jwks(_: Request) -> JSONResponse:
+        """Public key that verifies quote signatures (see docs/AGENT_INTEGRATION.md)."""
+        return JSONResponse(signer.jwks(), headers={"Cache-Control": "public, max-age=300"})
 
     @mcp.custom_route("/health", methods=["GET"])
     async def health(_: Request) -> JSONResponse:
@@ -220,7 +228,11 @@ def create_server(runtime_factory=gateway_runtime) -> FastMCP:
                 Jsonb([offer.model_dump(mode="json") for offer in offers]),
             ),
         )
-        return PriceAvailabilityResult(**row, offers=offers)
+        result = PriceAvailabilityResult(
+            **row, offers=offers, valid_until=row["quoted_at"] + QUOTE_TTL, key_id=signer.kid
+        )
+        result.signature = signer.sign(quote_signing_bytes(result))
+        return result
 
     @mcp.tool
     async def get_substitutes(request: SubstitutesRequest) -> list[SubstituteGroup]:

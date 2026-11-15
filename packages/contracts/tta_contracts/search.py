@@ -109,6 +109,7 @@ class ProductHit(BaseModel):
     unit_weight_kg: float | None
     allowed_lot_size: float | None      # order quantity must be a multiple of this; 0.01 for most products
     temperature_condition: str | None
+    country_of_origin: str | None = None
     claims: list[str] = []
     allergens_contains: list[str] = []
     delivery_reliability: float | None   # 0..1, None = no data

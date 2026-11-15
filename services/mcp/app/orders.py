@@ -1,5 +1,6 @@
 """Transactional order persistence and signer decisions."""
 
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from fastmcp.exceptions import ToolError
@@ -80,18 +81,24 @@ async def previous_order(conn, actor, request: PlaceOrderRequest) -> Order | Non
     return stored
 
 
+QUOTE_TTL = timedelta(minutes=15)
+
+
 async def quote_prices(state, request: PlaceOrderRequest) -> dict[int, Decimal]:
     if not request.quote_id:
         return {}
     row = await one(
         state.conn,
         """
-        select offers from wholesaler.quotes where id = %s and intent_id = %s and delivery_date = %s
+        select offers, quoted_at from wholesaler.quotes
+        where id = %s and intent_id = %s and delivery_date = %s
         """,
         (uuid(request.quote_id), uuid(state.intent.intent_id), request.delivery_date),
     )
     if row is None:
         raise ToolError(Reason.FORBIDDEN)
+    if datetime.now(UTC) - row["quoted_at"] > QUOTE_TTL:
+        return {}  # an expired quote is no reference: every line gets PRICE_MOVED, a person decides
     offers = [Offer.model_validate(offer) for offer in row["offers"]]
     return {
         offer.product_id: offer.unit_price_eur
