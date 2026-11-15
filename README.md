@@ -89,6 +89,5 @@ Traces: if the team's `.env` has Langfuse keys, open Langfuse → **Sessions**. 
 | --- | --- |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | System architecture, request logic, gateway rules, and the challenge requirements mapped to features |
 | [`docs/AGENT_INTEGRATION.md`](docs/AGENT_INTEGRATION.md) | How any external MCP agent buys through the gateway |
-| [`docs/SETUP_FROM_SCRATCH.md`](docs/SETUP_FROM_SCRATCH.md) | Building a new Supabase project from nothing (migrations, seed, catalog import) |
 | [`docs/PLAN.md`](docs/PLAN.md) | The full development plan (Vietnamese) |
 | [`CLAUDE.md`](CLAUDE.md) | Rules for anyone, human or AI, changing the code |

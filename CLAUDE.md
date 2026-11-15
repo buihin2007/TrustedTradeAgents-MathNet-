@@ -1,6 +1,6 @@
 # Trusted Trade Agents (Junction 2026, Valio Aimo track)
 
-Read this file before writing any code. Install and run: `README.md` (new Supabase project: `docs/SETUP_FROM_SCRATCH.md`). Architecture, request logic and the challenge requirements mapped to features, with open work: `docs/ARCHITECTURE.md`. Full plan: `docs/PLAN.md` (live version: https://claude.ai/artifact/BUTtVyQLjNt5hKhqRmXBZg).
+Read this file before writing any code. Install and run: `README.md`. Architecture, request logic and the challenge requirements mapped to features, with open work: `docs/ARCHITECTURE.md`. Full plan: `docs/PLAN.md` (live version: https://claude.ai/artifact/BUTtVyQLjNt5hKhqRmXBZg).
 
 ## What we build
 
