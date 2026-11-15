@@ -4,10 +4,10 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from app.agent import Agent
 from app.auth import Identity
 from app.config import Settings
 from app.gateway import Gateway
-from app.pipeline import Pipeline
 from tests.factories import PROFILE, USER_ID, FakeGateway, FakeLLM, MemoryStore
 from tests.test_gateway import StubClient
 
@@ -19,7 +19,7 @@ async def test_pipeline_spans_and_audit_share_trace_without_tokens_or_prompts():
     tracer = provider.get_tracer("test")
     store = MemoryStore()
     request = await store.create_request(PROFILE, "private buyer wording")
-    await Pipeline(store, FakeGateway(), FakeLLM(), tracer_instance=tracer).run(
+    await Agent(store, FakeGateway(), FakeLLM(), tracer_instance=tracer).run(
         request.id,
         PROFILE,
         Identity(str(USER_ID), "private-user-jwt"),

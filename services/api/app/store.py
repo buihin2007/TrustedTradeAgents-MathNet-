@@ -148,7 +148,7 @@ class PostgresStore:
             async with self.pool.connection() as conn:
                 await write(conn)
 
-    async def ask(self, profile: Profile, request_id: UUID, question: str, choices: list[str]):
+    async def ask(self, profile: Profile, request_id: UUID, question: str, choices: list[str], question_id=None):
         async with self.pool.connection() as conn:
             owned = await (
                 await conn.execute(
@@ -161,8 +161,9 @@ class PostgresStore:
                 raise Conflict("Request is unavailable")
             row = await (
                 await conn.execute(
-                    "INSERT INTO buyer.questions (request_id, question, choices) VALUES (%s, %s, %s) RETURNING *",
-                    (request_id, question, Jsonb(choices)),
+                    "INSERT INTO buyer.questions (id, request_id, question, choices) "
+                    "VALUES (COALESCE(%s, gen_random_uuid()), %s, %s, %s) RETURNING *",
+                    (question_id, request_id, question, Jsonb(choices)),
                 )
             ).fetchone()
         return Question.model_validate(row)

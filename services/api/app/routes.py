@@ -1,9 +1,11 @@
 """Buyer REST endpoints; ownership checks precede every gateway operation."""
 
+import json
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from tta_contracts import (
     ActorType,
     ApproveOrderRequest,
@@ -18,6 +20,7 @@ from tta_contracts import (
 )
 
 from .auth import User
+from .live import FINAL
 from .models import (
     AnswerRequest,
     ApprovalRequest,
@@ -117,7 +120,39 @@ async def request_detail(request_id: UUID, request: Request, user: User, profile
             await store.record_order(profile, item.id, order, audit=reconciliation_audit(item, order))
             item = await owned_request(store, profile, request_id)
         item.order = order
+    live, _ = request.app.state.hub.latest(request_id)
+    if live and item.status in ("running", "asking") and not item.order_id:
+        # The agent publishes to memory before it writes to the database: show the newer state.
+        item.status, item.step, item.error, item.parsed = live["status"], live["step"], live["error"], live["parsed"]
     return item
+
+
+@router.get("/requests/{request_id}/stream")
+async def stream_request(request_id: UUID, request: Request, user: User, profile: Buyer, store: Store):
+    """Server-sent events: the whole request snapshot every time the agent changes it."""
+    item = await owned_request(store, profile, request_id)
+    hub = request.app.state.hub
+
+    def event(snapshot):
+        return f"data: {json.dumps(snapshot, default=str)}\n\n"
+
+    async def events():
+        snapshot, revision = hub.latest(request_id)
+        if snapshot is None or item.status in FINAL:
+            snapshot = item.model_dump(mode="json", include={"id", "text", "status", "step", "error", "parsed", "created_at"})
+        yield event(snapshot)
+        while snapshot["status"] not in FINAL:
+            if not await hub.wait(request_id, revision, timeout=10):
+                yield ": keep-alive\n\n"
+                continue
+            snapshot, revision = hub.latest(request_id)
+            yield event(snapshot)
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/requests/{request_id}/answer", response_model=RequestDetail, status_code=202)
@@ -130,7 +165,11 @@ async def answer_request(
     store: Store,
 ):
     await owned_request(store, profile, request_id)
-    await store.answer(profile, request_id, body.question_id, body.answer)
+    agent = request.app.state.pipeline
+    await agent.settle(request_id)  # the run that asked must have saved its question first
+    stored = json.dumps({"values": body.values, "other": body.other, "text": body.answer}, ensure_ascii=False)
+    await store.answer(profile, request_id, body.question_id, stored)
+    agent.note_answer(request_id, body.question_id, body.answer)
     await store.append_event(
         profile,
         request_id,

@@ -10,6 +10,7 @@ from tta_contracts import (
     AuditEvent,
     Criteria,
     Facets,
+    Mandate,
     Offer,
     Order,
     PriceAvailabilityResult,
@@ -17,6 +18,7 @@ from tta_contracts import (
     SearchResult,
 )
 
+from app.brain import Dish, Ingredient, Item, Plan
 from app.models import ParsedRequest, Profile, Question, RequestDetail
 from app.store import Conflict
 
@@ -146,11 +148,11 @@ class MemoryStore:
     async def save_options(self, profile, request_id, options):
         await self.update_request(profile, request_id, options=options)
 
-    async def ask(self, profile, request_id, question, choices):
+    async def ask(self, profile, request_id, question, choices, question_id=None):
         item = self.requests[request_id]
         item.questions.append(
             Question(
-                id=uuid4(),
+                id=question_id or uuid4(),
                 request_id=request_id,
                 question=question,
                 choices=choices,
@@ -231,22 +233,49 @@ class MemoryStore:
 
 
 class FakeLLM:
-    def __init__(self, result=None, screen_score=0.97):
-        self.result = result or parsed()
-        self.answers = []
+    """Stands in for app.brain.Brain: fixed plan, fixed dishes, fixed Jev score."""
+
+    def __init__(self, plan=None, dishes=None, screen_score=0.97):
+        self.plan_result = plan or milk_plan()
+        self.dishes = dishes or [soup()]
         self.screen_score = screen_score
-        self.screened = []
+        self.screened, self.planned, self.recipe_calls = [], [], []
 
     async def screen(self, text):
         self.screened.append(text)
         return self.screen_score
 
-    async def parse(self, text, answers, facets):
-        self.answers = answers
-        return self.result
+    async def plan(self, text, history, allergens, claims, today):
+        self.planned.append((text, list(history)))
+        result = self.plan_result(text, history) if callable(self.plan_result) else self.plan_result
+        return result.model_copy(deep=True)
 
-    async def explain(self, options):
-        return [f"Estimated EUR {item.total_eur}" for item in options]
+    async def recipes(self, **kwargs):
+        self.recipe_calls.append(kwargs)
+        return [dish.model_copy(deep=True) for dish in self.dishes]
+
+
+def milk_plan(**kwargs):
+    values = dict(
+        kind="products",
+        summary="40 l of milk",
+        delivery_date=DELIVERY,
+        items=[Item(name="milk", search_en="milk", search_fi="maito", quantity=40, unit="l")],
+    )
+    return Plan(**{**values, **kwargs})
+
+
+def soup(name="Salmon soup", **kwargs):
+    values = dict(
+        name=name,
+        why="warming and quick to scale",
+        ingredients=[
+            Ingredient(name="salmon fillet", search_en="salmon fillet", search_fi="lohifilee", amount=120, unit="g"),
+            Ingredient(name="cream", search_en="cooking cream", search_fi="ruokakerma", amount=80, unit="ml", dairy=True),
+        ],
+        pantry=["salt", "dill"],
+    )
+    return Dish(**{**values, **kwargs})
 
 
 class FakeGateway:
@@ -267,6 +296,18 @@ class FakeGateway:
                 expires_at=datetime.now(UTC),
             ),
             "search_products": SearchResult(query_id="query", criteria_shape="", sql_source="template", hits=[hit()]),
+            "search_products_batch": lambda arguments: [
+                SearchResult(query_id="query", criteria_shape="", sql_source="template", hits=[hit()])
+                for _ in arguments["queries"]
+            ],
+            "get_mandate": Mandate(
+                mandate_id="m",
+                org_id=str(ORG_ID),
+                agent_id=str(AGENT_ID),
+                version=1,
+                signed_by=str(USER_ID),
+                signed_at=datetime.now(UTC),
+            ),
             "get_price_availability": PriceAvailabilityResult(
                 quote_id="quote",
                 delivery_date=DELIVERY,

@@ -15,8 +15,10 @@ class Settings:
     agent_key: str = field(default="", repr=False)
     openrouter_api_key: str = field(default="", repr=False)
     llm_model: str = ""
+    llm_fast_model: str = ""          # optional faster model for the agent; defaults to llm_model
+    llm_fallback_model: str = "anthropic/claude-haiku-5.5"
     jev_model: str = "~typesafe/jev-latest"
-    buyer_timezone: str = "Europe/Kyiv"
+    buyer_timezone: str = "Europe/Helsinki"
 
     def today(self):
         return datetime.now(ZoneInfo(self.buyer_timezone)).date()
@@ -31,6 +33,8 @@ class Settings:
             agent_key=os.getenv("AGENT_KEY", ""),
             openrouter_api_key=os.getenv("OPENROUTER_API_KEY", ""),
             llm_model=os.getenv("LLM_MODEL", ""),
+            llm_fast_model=os.getenv("LLM_FAST_MODEL", ""),
+            llm_fallback_model=os.getenv("LLM_FALLBACK_MODEL", "anthropic/claude-haiku-5.5"),
             jev_model=os.getenv("JEV_MODEL") or "~typesafe/jev-latest",
-            buyer_timezone=os.getenv("BUYER_TIMEZONE") or "Europe/Kyiv",
+            buyer_timezone=os.getenv("BUYER_TIMEZONE") or "Europe/Helsinki",
         )

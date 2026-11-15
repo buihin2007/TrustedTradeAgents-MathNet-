@@ -20,8 +20,10 @@ class CreateRequest(StrictModel):
 
 
 class AnswerRequest(StrictModel):
-    answer: str = Field(min_length=1, max_length=1000)
+    answer: str = Field(min_length=1, max_length=1000)  # text shown in the conversation
     question_id: UUID
+    values: list[str] = Field(default=[], max_length=20)  # values of the options that were picked
+    other: str = Field(default="", max_length=500)  # free text typed into "Other"
 
 
 class ApprovalRequest(StrictModel):
@@ -69,7 +71,7 @@ class RequestRecord(BaseModel):
     text: str
     status: RequestStatus
     step: str | None = None
-    parsed: ParsedRequest | None = None
+    parsed: dict | None = None  # agent state (v2): plan, feed of steps/questions/baskets, order
     intent_id: UUID | None = None
     order_id: UUID | None = None
     error: str | None = None

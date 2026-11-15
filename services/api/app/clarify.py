@@ -1,20 +1,7 @@
-"""Deterministic handling of clarification answers.
-
-The LLM re-parses the whole request each round and often ignores answers or nulls a typed date as
-"ambiguous", which made the pipeline ask the same question forever. Fields the buyer has already
-given are therefore filled in by code: earlier parse first, then the answers, latest first.
-"""
+"""Read dates and quantities from the buyer's free-text answers in code, not with the LLM."""
 
 import re
 from datetime import date, timedelta
-
-from .models import ParsedRequest, Question
-
-QUESTIONS = {
-    "quantity": "How much do you need? For example: 20 kg, 40 l or 12 pcs.",
-    "delivery_date": "Which delivery date? Pick one or type a date (YYYY-MM-DD, 24.11. or Monday).",
-}
-MAX_ASKS = 3  # same question asked this often without a usable answer: stop instead of looping
 
 _WEEKDAYS = {}
 for _i, _names in enumerate(
@@ -74,41 +61,3 @@ def parse_quantity(text: str) -> tuple[float, str] | None:
         return None
     value = float(m[1].replace(",", "."))
     return (value, _UNITS[m[2]]) if value > 0 else None
-
-
-def fill_missing(parsed: ParsedRequest, previous: ParsedRequest | None, questions: list[Question], today: date):
-    """Fill quantity/unit/date the LLM left null from the earlier parse, then from answers (latest first)."""
-    updates = {}
-    for name in ("quantity", "quantity_unit", "delivery_date"):
-        if getattr(parsed, name) is None and previous is not None and getattr(previous, name) is not None:
-            updates[name] = getattr(previous, name)
-    answers = [q.answer for q in sorted(questions, key=lambda q: q.asked_at, reverse=True) if q.answer]
-    if parsed.delivery_date is None and "delivery_date" not in updates:
-        updates["delivery_date"] = next((d for a in answers if (d := parse_date(a, today))), None)
-    if (parsed.quantity is None or parsed.quantity_unit is None) and "quantity" not in updates:
-        found = next((q for a in answers if (q := parse_quantity(a))), None)
-        if found:
-            updates["quantity"], updates["quantity_unit"] = found
-    if updates.get("delivery_date") is not None and updates["delivery_date"] < today:
-        updates["delivery_date"] = None
-    return parsed.model_copy(update={k: v for k, v in updates.items() if v is not None})
-
-
-def next_question(parsed: ParsedRequest, questions: list[Question], today: date):
-    """(field, question, choices) for the first missing field, or None. Raises if asked MAX_ASKS times."""
-    field = (
-        "quantity" if parsed.quantity is None or parsed.quantity_unit is None
-        else "delivery_date" if parsed.delivery_date is None
-        else None
-    )
-    if field is None:
-        return None
-    text = QUESTIONS[field]
-    if sum(q.question == text for q in questions) >= MAX_ASKS:
-        raise ValueError(field)
-    if field == "delivery_date":
-        days = [today + timedelta(days=n) for n in range(1, 9)]
-        choices = [f"{d.isoformat()} ({d.strftime('%a')})" for d in days if d.weekday() != 6][:6]
-    else:
-        choices = []
-    return field, text, choices

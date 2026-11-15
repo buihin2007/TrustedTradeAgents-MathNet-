@@ -113,6 +113,7 @@ class GatewaySession:
             in {
                 "get_facets",
                 "search_products",
+                "search_products_batch",
                 "get_price_availability",
                 "get_substitutes",
                 "get_order",

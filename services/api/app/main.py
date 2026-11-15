@@ -8,11 +8,12 @@ from fastapi.responses import JSONResponse
 from psycopg import Error as DatabaseError
 from psycopg_pool import PoolTimeout
 
+from .agent import Agent, Tasks
 from .auth import SupabaseVerifier
+from .brain import Brain
 from .config import Settings
 from .gateway import Gateway, GatewayDenied, GatewayUnavailable
-from .llm import OpenRouter
-from .pipeline import Pipeline, Tasks
+from .live import Hub
 from .routes import router
 from .store import Conflict, PostgresStore
 from .telemetry import create_provider
@@ -33,10 +34,13 @@ def create_app(settings: Settings | None = None, *, store=None, gateway=None, ll
                 await owned_store.open()
                 app.state.store = owned_store
             app.state.gateway = gateway or Gateway(config)
-            app.state.llm = llm or OpenRouter(config, client, tracer_instance=tracer)
-            app.state.pipeline = Pipeline(
-                app.state.store, app.state.gateway, app.state.llm, tracer_instance=tracer, today=config.today
+            app.state.llm = llm or Brain(config, client, tracer_instance=tracer)
+            app.state.pipeline = Agent(
+                app.state.store, app.state.gateway, app.state.llm, app.state.hub,
+                tracer_instance=tracer, today=config.today,
             )
+            if gateway is None:  # real gateway only: fetch facet codes before the first request
+                app.state.tasks.start(app.state.pipeline.warm())
             try:
                 yield
             finally:
@@ -51,6 +55,7 @@ def create_app(settings: Settings | None = None, *, store=None, gateway=None, ll
     application.state.verifier = verifier
     application.state.store = store
     application.state.tasks = Tasks()
+    application.state.hub = Hub()
     application.include_router(router)
 
     @application.middleware("http")
