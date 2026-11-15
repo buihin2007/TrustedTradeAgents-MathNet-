@@ -2,7 +2,7 @@
 
 Nov 15, 2026 · @ikm
 
-Plan này đưa team 4 người từ repo rỗng đến một prototype chạy bằng docker compose trong 8 đến 14 giờ: app đăng nhập cho người mua (Next.js + FastAPI) chạy trên MCP server của Valio Aimo (FastMCP), có gate dùng Jev, search hybrid do LLM sinh SQL, audit log và trace.
+Plan này đưa team 4 người từ repo rỗng đến một prototype chạy bằng docker compose trong 8 đến 14 giờ: app đăng nhập cho người mua (Next.js + FastAPI) chạy trên MCP server của Valio Aimo (FastMCP): agent hỏi lại bằng câu trắc nghiệm, gợi ý món theo hàng còn, gate bằng luật code, Jev lọc đầu vào, search hybrid, audit log và trace.
 
 ## Quyết định đã chốt
 
@@ -17,8 +17,12 @@ Mười một lựa chọn đầu đến từ buổi grill; năm dòng cuối l�
 | Search: ai viết SQL | LLM sinh SQL từ criteria; prompt chỉ chứa phần schema cần thiết | Grill |
 | Search: bảo vệ | 4 lớp: role chỉ đọc trên 1 view, parser, timeout 2 giây, kiểm lại kết quả theo điều kiện cứng | Grill |
 | Search: khớp tên | Hybrid ngay từ đầu: full-text + vector, gộp điểm RRF | Grill |
-| Agent | Luồng cố định hoàn toàn; LLM chỉ đọc yêu cầu và viết lời giải thích | Grill |
-| Gate | Jev validate từng tool call; luật số do code kiểm; Jev chỉ làm quyết định chặt hơn | Grill |
+| Agent | LLM hiểu yêu cầu và gợi ý công thức; code hỏi lại, chọn hàng, dựng giỏ; cổng kiểm lại | Làm lại 15/11 |
+| Jev | Lọc câu đầu của người mua (lạc đề, spam, xã giao) ở `api`; Jev cho từng tool call tắt mặc định (`GATEWAY_JEV=1` để bật) | Làm lại 15/11 |
+| Gate | Luật số do code kiểm: danh tính, mandate, trần, chính sách đơn | Grill |
+| Hỏi lại | Mỗi lần một câu trắc nghiệm, có ô gõ thêm; hiện từng bước của agent theo thời gian thực | Làm lại 15/11 |
+| Không nêu món | Hỏi số người và ngày, gợi ý 3 món theo hàng Valio còn đúng ngày giao | Làm lại 15/11 |
+| Đặt hàng | Agent dựng 3 giỏ; người mua chọn một rồi mới gửi lên cổng | Làm lại 15/11 |
 | Duyệt đơn | Cổng MCP giữ đơn ở trạng thái held; chỉ mở bằng JWT Supabase của người dùng | Grill |
 | Hạn sử dụng | Không làm | Grill |
 | Tách dữ liệu | 1 project Supabase, 2 schema: `buyer` và `wholesaler` | Mặc định |
@@ -39,10 +43,10 @@ flowchart LR
   N[nginx<br/>định tuyến, rate limit]
   subgraph Buyer[Bên mua]
     W[web · Next.js]
-    A[api · FastAPI<br/>JWT, luồng agent, audit, MCP client]
+    A[api · FastAPI<br/>JWT, agent, SSE, audit, MCP client]
   end
   subgraph Seller[Valio Aimo · mcp FastMCP]
-    G[Gate<br/>key/JWT, mandate, hạn mức, Jev]
+    G[Gate<br/>key/JWT, mandate, hạn mức]
     T[Tools<br/>search, giá và tồn kho, đặt đơn]
   end
   subgraph SB[Supabase cloud]
@@ -64,8 +68,8 @@ Hình chỉ vẽ đường đi của request. Bảng dưới liệt kê đủ th
 | --- | --- | --- | --- |
 | `nginx` | nginx | Định tuyến `/`, `/api/`, `/mcp`; rate limit theo IP và theo key | Không |
 | `web` | Next.js 16, `@supabase/ssr` | Đăng nhập; 6 trang của người mua | Supabase Auth |
-| `api` | FastAPI | Kiểm JWT; chạy luồng agent; ghi audit; làm MCP client | OpenRouter (LLM đọc yêu cầu, viết giải thích) |
-| `mcp` | FastMCP | Gate; 13 tool; giữ đơn; ghi nhật ký cổng | OpenRouter (Jev, embeddings, LLM sinh SQL); API giả của đề |
+| `api` | FastAPI | Kiểm JWT; chạy agent; đẩy từng bước qua SSE; ghi audit; làm MCP client | OpenRouter (Jev lọc câu đầu, LLM hiểu yêu cầu, LLM gợi ý công thức) |
+| `mcp` | FastMCP | Gate; 14 tool; giữ đơn; ghi nhật ký cổng | OpenRouter (embeddings; Jev và LLM sinh SQL chỉ khi bật); API giả của đề |
 | Supabase | Auth, Postgres, pgvector | Người dùng; schema `buyer`; schema `wholesaler` | Không |
 | Langfuse | OTLP qua HTTP | Nhận trace từ `api` và `mcp` | Không |
 
@@ -179,7 +183,7 @@ grant search_ro to postgres;
 
 ### Script import, chạy một lần
 
-`scripts/import/run.py`, chạy từ gốc repo sau migration 0001 đến 0003: `python scripts/import/run.py`. Thêm `--limit 200` để thử nhanh.
+`scripts/import/run.py`, chạy từ gốc repo sau migration 0001 đến 0003: `python scripts/import/run.py`. Thêm `--limit 200` để thử nhanh. Import xong thì chạy `0004_vector_index.sql` (index HNSW cho embeddings; thiếu nó thì mỗi lần tìm quét toàn bộ vector và dễ vượt 2 giây).
 
 1. Đọc file JSON sản phẩm (87 MB, 17.546 sản phẩm) và hai file CSV trong `data/`.
 2. Làm phẳng: tên theo 3 ngôn ngữ, brand, GTIN, claims, dị ứng (cả `CONTAINS` và `MAY_CONTAIN`), nhãn bao bì, thành phần.
@@ -202,9 +206,10 @@ Seed đi kèm: 1 tổ chức, 1 người dùng demo, 1 agent, 1 mandate.
 | `register_intent` | Người (JWT) | Lưu yêu cầu gốc, trả `intent_id` | Intent sống 24 giờ |
 | `get_facets` | Agent | Trả từ vựng hợp lệ: claims, category, nhiệt độ, đơn vị | Cache 10 phút |
 | `search_products` | Agent | Criteria vào, tối đa 50 sản phẩm ra | 200 sản phẩm khác nhau mỗi intent |
+| `search_products_batch` | Agent | Tối đa 30 criteria trong một lần gọi: một lần embedding, một câu SQL `UNION ALL` | Như trên |
 | `get_price_availability` | Agent | Giá và tồn kho theo ngày giao | 50 mã mỗi lần gọi |
 | `get_substitutes` | Agent | Sản phẩm thay thế vẫn đạt điều kiện cứng | 10 mã mỗi lần gọi |
-| `place_order` | Agent | Gửi 1 đến 4 phương án, nhận `placed`, `held` hoặc `blocked` | Bắt buộc `idempotency_key` |
+| `place_order` | Agent | Gửi 1 đến 4 phương án (tối đa 40 dòng mỗi phương án), nhận `placed`, `held` hoặc `blocked` | Bắt buộc `idempotency_key` |
 | `get_order` | Agent, người | Trạng thái đơn và lý do | Chỉ đơn của tổ chức mình |
 | `approve_order`, `reject_order` | Người (JWT) | Chọn một phương án của đơn `held`, hoặc từ chối | Cổng kiểm lại giá và tồn kho |
 | `get_mandate`, `update_mandate` | Người (JWT) | Xem và sửa hạn mức | Mỗi lần sửa tạo version mới |
@@ -362,7 +367,7 @@ Cổng không nới `must`. Nó chạy thêm một truy vấn đếm: bỏ lần
 
 ## Gate
 
-Gate là một middleware của FastMCP, chạy ở hook `on_call_tool`, trước mọi tool. Muốn từ chối thì ném `ToolError`. Nguyên tắc: code quyết định, Jev chỉ được làm quyết định chặt hơn.
+Gate là một middleware của FastMCP, chạy ở hook `on_call_tool`, trước mọi tool. Muốn từ chối thì ném `ToolError`. Nguyên tắc: code quyết định. Jev ở cổng là tuỳ chọn và chỉ được làm quyết định chặt hơn.
 
 ### Hai loại danh tính
 
@@ -381,13 +386,15 @@ Gate là một middleware của FastMCP, chạy ở hook `on_call_tool`, trướ
 4. Agent có đang bị tạm dừng không.
 5. `intent_id` có thật, thuộc đúng tổ chức, còn hạn không.
 6. Trần cứng bằng code: số mã mỗi lần gọi, số sản phẩm khác nhau mỗi intent, tần suất theo agent.
-7. Jev đọc tool call và trả xác suất cho từng câu hỏi.
+7. Chỉ khi `GATEWAY_JEV=1`: Jev đọc tool call và trả xác suất cho từng câu hỏi.
 8. Riêng `place_order`: chính sách đơn hàng bằng code.
 9. Lấy kết quả chặt nhất. Ghi một dòng `gateway_events` và một span.
 
 Bước 6 đứng trước bước 7 để call sai luật không tốn một lần gọi Jev. Tool của người dừng ở bước 5, không qua Jev.
 
 ### Jev kiểm cái gì
+
+Từ 15/11 Jev chạy ở đầu vào của `api` (bước 2 của luồng agent): một câu hỏi `purchase_request` cho câu đầu tiên của người mua, ngưỡng chặn 0,2, Jev lỗi thì cho qua. Phần dưới mô tả Jev cho từng tool call ở cổng, chỉ chạy khi bật `GATEWAY_JEV=1`.
 
 Gửi tới `POST https://openrouter.ai/api/alpha/decisions` một `state` gồm: yêu cầu gốc và criteria của intent, tóm tắt mandate, tên tool, tham số, số lần gọi trước đó trong intent. Mọi câu hỏi dùng kiểu `noul`, mỗi câu trả một xác suất từ 0 đến 1.
 
@@ -443,15 +450,16 @@ Mandate mẫu: tự mua tối đa 150 EUR, một đơn tối đa 600 EUR, một 
 
 ## Backend bên mua và agent
 
-`api` là FastAPI. Nó làm ba việc: kiểm JWT, chạy luồng agent, ghi audit. Agent ở đây là một luồng cố định. LLM chỉ xuất hiện ở hai bước: đọc yêu cầu và viết lời giải thích.
+`api` là FastAPI. Nó làm bốn việc: kiểm JWT, chạy agent, đẩy từng bước ra trình duyệt, ghi audit. LLM chỉ hiểu yêu cầu và đề xuất công thức. Mọi con số, mọi lựa chọn sản phẩm và giỏ hàng do code tính, và cổng kiểm lại lần nữa.
 
 ### Endpoint
 
 | Method và đường dẫn | Việc |
 | --- | --- |
-| `POST /api/requests` | Nhận câu yêu cầu, tạo request, chạy luồng nền |
-| `GET /api/requests`, `GET /api/requests/{id}` | Danh sách và chi tiết, kèm bước hiện tại |
-| `POST /api/requests/{id}/answer` | Trả lời câu hỏi của agent, hoặc gõ thêm yêu cầu |
+| `POST /api/requests` | Nhận câu yêu cầu, tạo request, chạy agent ở luồng nền |
+| `GET /api/requests`, `GET /api/requests/{id}` | Danh sách và chi tiết, kèm toàn bộ feed của agent |
+| `GET /api/requests/{id}/stream` | Server-sent events: gửi lại cả snapshot mỗi khi agent đổi trạng thái |
+| `POST /api/requests/{id}/answer` | Trả lời câu hỏi: `{question_id, answer, values, other}` |
 | `GET /api/approvals` | Các đơn đang `held` |
 | `POST /api/approvals/{order_id}` | Duyệt một phương án hoặc từ chối |
 | `GET /api/mandate`, `PUT /api/mandate` | Xem và sửa hạn mức |
@@ -463,52 +471,64 @@ Mọi endpoint kiểm JWT bằng `supabase.auth.get_claims(jwt)`. Hàm này ki�
 ### Luồng agent cho một yêu cầu
 
 1. Lưu câu yêu cầu. Ghi `request.created`.
-2. LLM đọc yêu cầu thành `ParsedRequest` bằng structured output: sản phẩm, điều kiện cứng, ưu tiên, số lượng, ngày giao.
-3. Thiếu thông tin bắt buộc (số lượng, ngày giao) thì dừng và hỏi người dùng bằng câu hỏi trắc nghiệm. Ghi `agent.asked_user`.
-4. Đăng ký intent tại cổng bằng JWT của người dùng. Ghi `intent.registered`.
-5. Lấy facets, đổi lời người dùng thành mã hợp lệ.
-6. Gọi `search_products`. Không có kết quả thì dùng phần chẩn đoán của cổng để hỏi người dùng nới điều kiện nào.
-7. Gọi `get_price_availability` cho tối đa 50 ứng viên.
-8. Code dựng tối đa 4 phương án và chấm điểm.
-9. LLM viết 1 đến 2 câu giải thích cho mỗi phương án, chỉ từ số liệu code đưa.
-10. Gọi `place_order` với các phương án và phương án ưu tiên.
-11. Ghi kết quả: `order.placed`, `gate.held` hoặc `order.blocked`.
+2. **Lọc và hiểu, chạy song song.** Jev chấm xác suất câu này là yêu cầu mua hàng. Cùng lúc, một lần gọi LLM (`brain.plan`) đổi câu thành `Plan`: hàng cụ thể hay thực đơn, số người, ngày giao, dị ứng cần tránh, chế độ ăn. Jev từ 0,2 trở xuống, hoặc LLM bảo lạc đề mà Jev dưới 0,9: từ chối ngay, không gọi cổng. Ghi `request.screened`.
+3. **Hỏi từng câu.** Thiếu số người, ngày giao hoặc số lượng thì hỏi một câu trắc nghiệm, có ô gõ thêm. Ngày và số lượng gõ tay được code đọc (`clarify.py`); câu trả lời khác đưa lại cho LLM cập nhật `Plan`, giữ nguyên những gì đã biết. Mỗi câu hỏi tối đa 3 đến 6 lần rồi dừng với thông báo rõ. Ghi `agent.asked_user`.
+4. **Thực đơn.** Không nêu món thì LLM (`brain.recipes`) gợi ý 3 món, mỗi nguyên liệu có lượng cho một người và một nguyên liệu thay thế theo công thức. Lời gọi này bắt đầu ngay từ bước 2, chạy trong lúc người mua trả lời câu hỏi.
+5. **Đăng ký intent** bằng JWT của người mua: câu gốc, ngày giao, dị ứng cần tránh. Ghi `intent.registered`.
+6. **Tìm hàng.** Một lần `search_products_batch` cho mọi nguyên liệu (tối đa 30). Code loại sản phẩm không chứa đúng tên nguyên liệu (danh từ chính và phần lớn các từ còn lại, hoặc từ tiếng Phần Lan). Ghi `search.executed`.
+7. **Giá và tồn kho.** Một lần `get_price_availability` cho tối đa 50 mã, đúng ngày giao. Ghi `price.checked`.
+8. **Gợi ý món theo kho.** Mỗi món hiện số nguyên liệu còn hàng hôm đó và giá ước tính mỗi người. Người mua tick món, gõ món khác, hoặc chọn "Suggest other dishes" để LLM gợi ý món khác tránh các nguyên liệu đang thiếu. Ghi `menu.suggested`. Nếu Valio báo 0 hàng cho mọi mã trong ngày đó, agent không gợi ý món mà hỏi ngày khác.
+9. **Dựng giỏ bằng code** (`sourcing.py`), xem bảng dưới. Ghi `options.built`.
+10. **Người mua chọn giỏ**, hoặc dời sang ngày sớm nhất đủ hàng, hoặc huỷ.
+11. Gọi `place_order` với các giỏ và giỏ được chọn. Ghi `order.placed`, `gate.held` hoặc `order.blocked`.
 
-### Dựng 4 phương án bằng code
+Một request gọi cổng 3 lần (intent, tìm, giá) và gọi LLM 1 lần (thêm 1 lần cho thực đơn). Snapshot mới nhất nằm trong bộ nhớ của `api` để đẩy qua SSE; trạng thái bền nằm trong `buyer.requests.parsed` (`plan`, `feed`, `baskets`).
 
-| Phương án | Cách chọn |
+### Dựng giỏ bằng code
+
+| Giỏ | Cách chọn sản phẩm cho mỗi nguyên liệu |
 | --- | --- |
-| Khớp nhất | Điểm hybrid cao nhất, đủ hàng, đúng thương hiệu ưu tiên |
-| Rẻ nhất | Giá so sánh theo lít hoặc kg thấp nhất trong các ứng viên đạt `must` |
-| Chắc hàng nhất | Độ tin cậy giao hàng cao nhất; khi hoà thì CO2 thấp hơn xếp trên |
-| Tách đơn hoặc thay thế | Chỉ xuất hiện khi không ứng viên nào đủ hàng |
+| Best match | Kết quả xếp hạng cao nhất của tìm kiếm, đủ hàng |
+| Cheapest | Tổng tiền dòng thấp nhất trong các sản phẩm đủ hàng |
+| Most reliable | Độ tin cậy giao hàng cao nhất |
+
+Khi không sản phẩm nào đủ hàng, mỗi giỏ thử lần lượt:
+
+1. Nguyên liệu thay thế của công thức (ví dụ cá hồi đổi sang cá hồi vân), kèm ghi chú món thay đổi thế nào.
+2. Giao một phần, ghi rõ số đơn vị còn.
+3. Báo thiếu, kèm lý do (không có trong danh mục, hết hàng hôm đó, đã qua giờ chốt đơn) và ngày sớm nhất có hàng.
 
 Số đơn vị cần mua cho mỗi dòng:
 
 ```text
-units = ceil(quantity / unit_size), làm tròn lên bội số của allowed_lot_size
+amount = lượng mỗi người × số người   (thực đơn), hoặc lượng người mua nêu (hàng cụ thể)
+units  = ceil(amount / unit_size), làm tròn lên bội số của bước lô
 ```
 
-- `quantity`: lượng người dùng yêu cầu.
-- `unit_size`: cỡ một đơn vị bán.
-- `allowed_lot_size`: bội số lô của sản phẩm.
+- `unit_size`: cỡ một đơn vị bán, theo kg hoặc lít (1 lít coi như 1 kg khi thiếu một trong hai).
+- Bước lô: `allowed_lot_size` khi bán theo KG hoặc L; thùng, gói, hộp luôn mua nguyên đơn vị.
+- Nguyên liệu dùng chung cho nhiều món được cộng dồn và tìm một lần.
 
 | Yêu cầu | Cỡ đơn vị | Lô | Kết quả |
 | --- | --- | --- | --- |
 | 40 lít | 1 lít | 10 hộp | 40 hộp |
 | 45 lít | 1 lít | 10 hộp | 50 hộp |
+| 100 người × 120 g cá | thùng 2 kg | 1 | 6 thùng |
 
-### Ba kiểu kết thúc của agent
+Mỗi giỏ ghi sẵn cổng sẽ làm gì theo mandate hiện hành: đặt ngay, chờ duyệt, hay bị chặn. Đây chỉ là dự đoán; quyết định thật là của cổng.
 
-| Quyết định | Khi nào | Người dùng thấy gì |
+### Các kiểu kết thúc
+
+| Trạng thái | Khi nào | Người dùng thấy gì |
 | --- | --- | --- |
-| `buy_auto` | Cổng trả `placed` | Đơn đã đặt, kèm lý do chọn |
-| `ask_user` | Thiếu thông tin, hoặc không có kết quả | Câu hỏi trắc nghiệm, có ô gõ thêm |
-| `approval_required` | Cổng trả `held` | Tối đa 4 phương án để chọn tại trang duyệt |
+| `asking` | Chờ người mua trả lời | Popup câu hỏi, có ô gõ thêm |
+| `placed` | Cổng đặt đơn | Tổng tiền, ngày giao |
+| `held` | Cổng giữ đơn | Lý do giữ, nút sang trang Approvals |
+| `blocked` | Cổng chặn | Lý do chặn (chỉ các lý do chặn) |
+| `rejected` | Lạc đề, hoặc người mua huỷ | Câu giải thích agent làm được gì |
+| `failed` | Không nguồn được hàng, LLM hoặc cổng lỗi | Lý do và việc nên làm tiếp |
 
-Cổng trả `blocked` thì agent ghi quyết định `blocked` kèm mã lý do và dừng, không thử lách.
-
-Luồng chạy bằng `asyncio.create_task`. Trạng thái lưu trong `buyer.requests.status`. Trang web hỏi lại mỗi 2 giây. Prototype không cần hàng đợi.
+Agent không thử lách khi bị chặn. Luồng chạy bằng `asyncio.create_task`; không cần hàng đợi cho prototype.
 
 ## Frontend Next.js
 
@@ -519,8 +539,8 @@ Chỉ có một vai đăng nhập: người mua. Phase 1 và 2 dựng trang ch�
 | Đường dẫn | Nội dung | Dữ liệu |
 | --- | --- | --- |
 | `/login` | Email và mật khẩu | Supabase Auth |
-| `/requests` | Ô nhập yêu cầu, danh sách yêu cầu gần đây | `POST` và `GET /api/requests` |
-| `/requests/[id]` | Các bước của agent, criteria dạng chip, phương án, câu hỏi | `GET /api/requests/{id}`, hỏi lại mỗi 2 giây |
+| `/requests` | Ô nhập yêu cầu, câu mẫu bấm được, danh sách yêu cầu gần đây | `POST` và `GET /api/requests` |
+| `/requests/[id]` | Hội thoại với agent: các bước suy nghĩ theo thời gian thực, popup câu hỏi, thẻ món, thẻ giỏ hàng | `GET /api/requests/{id}/stream` (SSE), dự phòng hỏi lại mỗi giây |
 | `/approvals` | Đơn đang giữ, thẻ phương án, nút duyệt và từ chối | `GET` và `POST /api/approvals` |
 | `/mandate` | Hạn mức, nút tạm dừng agent | `GET` và `PUT /api/mandate` |
 | `/audit` | Dòng thời gian quyết định, lọc theo loại, link sang trace | `GET /api/audit` |
@@ -534,16 +554,15 @@ Chỉ có một vai đăng nhập: người mua. Phase 1 và 2 dựng trang ch�
 5. Tách dữ liệu khỏi trình bày: hook như `useRequest`, `useApprovals` giữ logic, component chỉ nhận props. Thay giao diện ở Phase 3 sẽ không đụng logic.
 6. Mọi con số trên thẻ phương án lấy từ dữ liệu. Câu giải thích của LLM chỉ là chữ đi kèm.
 
-### Thẻ phương án
+### Trang hội thoại
 
-Mỗi thẻ hiện đủ để người dùng không phải sửa tay:
+Thành phần trong `components/Chat.tsx`, dữ liệu qua hook `useRequestLive`:
 
-- Tên sản phẩm, số đơn vị, tổng tiền.
-- Ngày giao và mức đủ hàng.
-- Độ tin cậy giao hàng và CO2, nếu có dữ liệu.
-- Nhãn "thay thế" hoặc "tách đơn" khi áp dụng.
-
-Dưới các thẻ là ô gõ thêm yêu cầu, để chạy lại luồng với điều kiện mới.
+- **Khối suy nghĩ:** các bước liền nhau gộp thành một khối, bước đang chạy có vòng xoay, xong thì hiện kết quả và số giây; bấm để thu gọn.
+- **Popup câu hỏi:** nhãn ngắn, câu hỏi, các lựa chọn có mô tả, ô "something else". Câu chọn món cho tick nhiều.
+- **Thẻ món:** lý do hợp, số nguyên liệu còn hàng, giá ước tính mỗi người, nguyên liệu thiếu, nguyên liệu thay thế.
+- **Thẻ giỏ:** từng dòng (số đơn vị, cỡ, tiền, cho nguyên liệu nào, món nào), phần thiếu kèm ngày có hàng, nhãn cổng sẽ làm gì.
+- Câu trả lời của người mua hiện như tin nhắn bên phải.
 
 ### Giao diện đã có
 
@@ -711,13 +730,18 @@ Lưu ý khi viết Dockerfile:
 | `DATABASE_URL` | `api`, `mcp`, `import` | Chuỗi Session pooler |
 | `OPENROUTER_API_KEY` | `api`, `mcp`, `import` |  |
 | `LLM_MODEL`, `LLM_MODEL_SQL`, `LLM_MODEL_FALLBACK`, `EMBED_MODEL`, `JEV_MODEL` | `api`, `mcp`, `import` | Đổi model không cần sửa code |
+| `LLM_FAST_MODEL` | `api` | Tuỳ chọn: model nhanh hơn cho 2 lần gọi của agent |
+| `BUYER_TIMEZONE` | `api` | Mặc định `Europe/Helsinki`, dùng để hiểu "tomorrow", "Friday" |
+| `GATEWAY_JEV` | `mcp` | `1` bật Jev cho từng tool call ở cổng; mặc định `0` |
+| `SEARCH_BATCH_VECTORS` | `mcp` | `0` cho tìm theo lô chỉ dùng full-text |
+| `TRACE_CONTENT` | `api`, `mcp` | `0` để trace chỉ còn thời gian, không có nội dung |
 | `VALIO_API_BASE`, `VALIO_API_KEY`, `VALIO_CUSTOMER` | `mcp` | Key lấy từ tài liệu đề |
 | `AGENT_KEY` | `api` | Hash của nó nằm trong `wholesaler.agents` |
 | `MCP_URL` | `api` | `http://nginx/mcp` |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` | `api`, `mcp` | `tta_contracts.telemetry` tự dựng cấu hình OTLP |
 | `SUPABASE_PROJECT_REF`, `GRAFANA_DB_HOST`, `GRAFANA_DB_PASSWORD`, `GRAFANA_ADMIN_PASSWORD` | `grafana` | Host là phần host của chuỗi Session pooler |
 
-Chạy lần đầu: `docker compose up --build`, sau đó `docker compose run --rm import`. App người mua ở `http://localhost:8080`, dashboard Valio Aimo ở `http://localhost:3001`.
+Cài đặt từng bước: xem `README.md`. Thứ tự: migration 0001 đến 0003, seed, import, migration 0004, rồi `docker compose up -d --build`. App người mua ở `http://localhost:8080`, dashboard Valio Aimo ở `http://localhost:3001`.
 
 ## Phân công và mốc thời gian
 
@@ -771,6 +795,10 @@ Các khối code quyết định đúng sai của cả hệ thống đều là h
 | Kiểm lại kết quả | `services/mcp/tests/test_postcheck.py` | Dòng thiếu claim bị loại |
 | Dựng phương án | `services/api/tests/test_options.py` | 40 lít thành 40 hộp; 45 lít thành 50 hộp |
 | Chuỗi băm audit | `services/api/tests/test_audit.py` | Sửa một dòng thì kiểm chuỗi báo sai |
+| Agent | `services/api/tests/test_agent.py` | Lạc đề bị từ chối; hỏi người, ngày, số lượng; gợi ý món theo kho; thay thế theo công thức; hết hàng thì dời ngày; huỷ |
+| Đọc câu trả lời | `services/api/tests/test_clarify.py` | `24.11.`, `monday`, `perjantai`, `2,5 kilos`, ngày quá khứ bị bỏ |
+| Tìm theo lô | `services/mcp/tests/test_gateway.py` | Mỗi truy vấn một kết quả, đúng thứ tự; quá 30 truy vấn thì `CAP_EXCEEDED` |
+| Tồn kho Valio | `services/mcp/tests/test_valio.py` | Dòng tồn kho áp dụng từ ngày của nó; giờ UTC đổi sang ngày Helsinki; quá giờ chốt |
 
 Kiểm tay bằng MCP Inspector: chạy `npx @modelcontextprotocol/inspector`, trỏ tới `http://localhost:8080/mcp` với agent key.
 
@@ -778,11 +806,11 @@ Kiểm tay bằng MCP Inspector: chạy `npx @modelcontextprotocol/inspector`, t
 
 | # | Thao tác | Kết quả mong đợi | Tiêu chí chấm |
 | --- | --- | --- | --- |
-| 1 | Yêu cầu 40 lít sữa không lactose, giao thứ Ba | Đơn `placed` tự động, có lời giải thích | Demo chạy thật 30%; đúng nhu cầu 20% |
-| 2 | Yêu cầu 300 lít | Đơn `held`; người mua chọn một phương án; chuyển `placed` | Tự chủ và kiểm soát 20% |
-| 3 | Yêu cầu sản phẩm thiếu hàng | Phương án tách đơn hoặc thay thế, có nhãn rõ | Xử lý ngoại lệ 15% |
+| 1 | "What should I cook for 60 guests on Saturday?" | Hỏi đúng những gì thiếu, gợi ý 3 món theo hàng còn, chọn giỏ, `placed` | Demo chạy thật 30%; đúng nhu cầu 20% |
+| 2 | Cùng yêu cầu cho 300 người, hoặc 300 lít sữa | Đơn `held`; người mua duyệt ở trang Approvals; chuyển `placed` | Tự chủ và kiểm soát 20% |
+| 3 | Món có nguyên liệu hết hàng đúng ngày | Thay bằng nguyên liệu thay thế của công thức, hoặc báo ngày sớm nhất có hàng và cho dời ngày | Xử lý ngoại lệ 15% |
 | 4 | Yêu cầu 600 lít | `blocked` với `OVER_ORDER_LIMIT`; không đơn nào được tạo | Tự chủ và kiểm soát 20% |
-| 5 | Chạy `rogue_agent.py`: quét danh mục, đặt món không ai yêu cầu, bắn dồn | 429 từ nginx; Gate chặn vì vượt trần và vì điểm Jev thấp; cột đỏ trên Grafana nhảy lên ngay | Kiểm soát; ngoại lệ |
+| 5 | Gõ "hello how are you", rồi chạy `rogue_agent.py`: quét danh mục, đặt món không ai yêu cầu, gọi tool của người, bắn dồn | Câu lạc đề bị từ chối ngay; agent hư: 429 từ nginx, Gate chặn vì vượt trần, sai quyền, ngoài intent; cột đỏ trên Grafana nhảy lên | Kiểm soát; ngoại lệ |
 | 6 | Mở audit của người mua, rồi dashboard Grafana của Valio Aimo, bấm sang trace; mở MCP Inspector như một agent khác | Cùng một `trace_id` ở hai phía; agent ngoài dùng chung cửa và hiện trên dashboard | Mở và đường ra production 15% |
 
 Kịch bản 3 cần dữ liệu ổn định. Ưu tiên tìm một mã có tồn kho thấp thật qua API. Phương án lùi là biến `DEMO_FORCE_SHORTAGE=<product_id>` để cổng trả tồn kho thấp cho đúng một mã. Dùng biến này thì nói rõ khi trình bày.
@@ -792,7 +820,7 @@ Kịch bản 3 cần dữ liệu ổn định. Ưu tiên tìm một mã có tồ
 1. 20 giây: vấn đề và hình kiến trúc.
 2. 40 giây: kịch bản 1. Nhấn vào việc người dùng không phải sửa tay.
 3. 50 giây: kịch bản 2, màn hình duyệt.
-4. 40 giây: kịch bản 5. Agent hư bị chặn ở ba chỗ: nginx, trần cứng, Jev.
+4. 40 giây: kịch bản 5. Câu lạc đề bị Jev chặn ở đầu vào; agent hư bị chặn ở nginx, trần cứng và ma trận quyền.
 5. 30 giây: kịch bản 6, audit hai phía: trang audit của người mua và dashboard Grafana của Valio Aimo, rồi trace.
 
 Kịch bản 3 và 4 để dành cho phần hỏi đáp.
@@ -814,6 +842,10 @@ Kịch bản 3 và 4 để dành cho phần hỏi đáp.
 | Đường dẫn `/mcp` trả 307 | Client MCP báo lỗi chuyển hướng | Đặt cùng một đường dẫn, có hoặc không có gạch chéo cuối, ở cả nginx và client |
 | Grafana không nối được database | Panel báo lỗi datasource | Kiểm `dashboard_ro` đã có `login password`; username phải là `dashboard_ro.<project-ref>` |
 | Demo gãy vì mạng | Không gọi được OpenRouter hoặc API đề | Quay sẵn video 3 phút ở mốc M3 |
+| LLM chậm | Bước "Understanding your request" mất nhiều giây | Đặt `LLM_FAST_MODEL`; công thức đã chạy song song với câu hỏi |
+| Mọi mã báo 0 hàng | "0 in stock that day" cho cả danh sách | `scripts/valio_probe.py` xem câu trả lời thô; kiểm giờ chốt đơn; agent tự hỏi ngày khác |
+| Tìm khớp nhầm sản phẩm | Kẹo cho "sour cream", nước xịt phòng cho "rutabaga" | Bộ lọc tên trong `sourcing.relevant`; không khớp thì báo thiếu, không lấy bừa |
+| Request bị `FORBIDDEN` | Mọi request dừng ở bước đầu | `AGENT_KEY` phải bắt đầu bằng `tta_` và có hash trong `wholesaler.agents`; chạy `scripts/diagnose.py` |
 
 ### Tài liệu phải dán cho AI trước khi code
 

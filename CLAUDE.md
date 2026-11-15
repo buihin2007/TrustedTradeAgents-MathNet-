@@ -1,16 +1,22 @@
 # Trusted Trade Agents (Junction 2026, Valio Aimo track)
 
-Read this file before writing any code. Full plan: `docs/PLAN.md` (live version: https://claude.ai/artifact/BUTtVyQLjNt5hKhqRmXBZg).
+Read this file before writing any code. Install: `README.md`. Full plan: `docs/PLAN.md` (live version: https://claude.ai/artifact/BUTtVyQLjNt5hKhqRmXBZg).
 
 ## What we build
 
 A login app for a buyer (F&B manager) on top of Valio Aimo's MCP gateway.
 
 - `web` (Next.js) -> `api` (FastAPI, buyer side) -> `nginx` -> `mcp` (FastMCP, Valio Aimo gateway) -> Supabase Postgres + Valio mock API.
-- The purchasing agent is a fixed pipeline inside `api`. The LLM only parses the request and writes explanations. Code makes every decision.
-- Buyer agent (`services/api/app/agent.py`): one LLM call understands the request (products or menu) while Jev screens it; code asks one multiple-choice question at a time (people, date, quantity, dishes, basket); menus get recipes from the LLM, checked against Valio stock; sourcing is `register_intent` (user JWT) + `search_products_batch` + `get_price_availability`; baskets are computed in code; the buyer picks one and the gateway decides placed / held / blocked.
-- The agent publishes every step to the browser over `GET /api/requests/{id}/stream` (SSE, whole-snapshot events); the state lives in `buyer.requests.parsed` (`feed` of steps, questions, dish cards, baskets).
-- Jev screens the buyer's first message in `api` (spam / small talk -> request rejected, no LLM parse, no gateway call). Fails open if Jev is down.
+- The purchasing agent lives in `api`. The LLM understands the request and proposes recipes; code makes every decision (quantities, products, baskets) and the gateway re-checks them.
+- Buyer agent, one request:
+  1. Jev screens the first message while one LLM call (`brain.plan`) turns it into a `Plan` (products or menu, people, date, allergens, diet). Off topic -> `rejected`, no gateway call.
+  2. Code asks one multiple-choice question at a time (people, date, quantity, dishes, basket), with a free-text field. Typed dates and quantities are parsed in code (`clarify.py`); other free text goes back through `brain.plan`.
+  3. Menus: `brain.recipes` (started while the buyer answers) gives dishes with per-person amounts and recipe alternatives; each dish is checked against Valio stock for the delivery date.
+  4. Sourcing: `register_intent` (user JWT) -> `search_products_batch` -> `get_price_availability` (agent key). Three gateway calls per request.
+  5. `sourcing.py` builds the baskets (best match, cheapest, most reliable): other product, then recipe alternative, then partial fill with the earliest available date.
+  6. The buyer picks a basket -> `place_order` -> the gateway decides placed / held / blocked.
+- Files: `app/agent.py` (flow and questions), `brain.py` (OpenRouter: Jev, plan, recipes), `sourcing.py` (pure code), `clarify.py` (date and quantity parsers), `live.py` (in-memory snapshots).
+- The agent pushes every step to the browser over `GET /api/requests/{id}/stream` (SSE, whole-snapshot events; the web falls back to polling). State lives in `buyer.requests.parsed` as `{"v": 2, "plan", "feed", "baskets", ...}`; `feed` holds steps, questions, dish cards and baskets. The snapshot store is per process: run one `api` replica.
 - Every agent tool call passes the Gate in `mcp`: identity, mandate, caps, order policy. Outcomes: placed / held / blocked. Per-call Jev in the gate is opt-in (`GATEWAY_JEV=1`).
 
 ## Folders and owners
@@ -22,7 +28,7 @@ A login app for a buyer (F&B manager) on top of Valio Aimo's MCP gateway.
 | `scripts/import/` | P1 | One-off data import |
 | `services/mcp/search/` | P1 | Criteria -> guarded SQL -> hybrid rank |
 | `services/mcp/` (rest) | P2 | Tools, Gate middleware, Jev, order policy, held orders |
-| `services/api/` | P3 | Agent pipeline, audit log, REST for web |
+| `services/api/` | P3 | Buyer agent, audit log, REST and SSE for web |
 | `apps/web/`, `infra/nginx/`, `docker-compose.yml`, `scripts/rogue_agent.py` | P4 | |
 | `infra/grafana/`, `scripts/demo/` | UI-UX (or P2) | Valio Aimo audit dashboard |
 | Design | UI-UX | Delivers screens and tokens to P4, no code folder |
@@ -44,9 +50,11 @@ Only edit your own folders. Need a change elsewhere: ask its owner.
 - Ports: web 3000, api 8000, mcp 9000. Only nginx is published (8080).
 - `api` exposes public routes under `/api/...`. `mcp` serves MCP at `/mcp` (no trailing slash).
 - `api` calls the gateway at `MCP_URL=http://nginx/mcp`, never `mcp:9000`, so rate limits apply.
-- Database: migrations `0001_init.sql`, `0002_audit_dashboard.sql`, `0003_import_fixes.sql` (run in order), demo data `supabase/seed.sql`, fake gateway traffic `scripts/demo/fake_gateway_events.sql`.
-- Models: embeddings `baai/bge-m3` = `vector(1024)` (same model at import and at query time); LLM `deepseek/deepseek-v4.1-flash` with fallback `anthropic/claude-haiku-5.5`. Call OpenRouter with `"models": [LLM_MODEL, LLM_MODEL_FALLBACK]`, `response_format` json_schema strict, `"provider": {"sort": "price", "require_parameters": true}`, then validate with Pydantic.
-- Tracing: call `tta_contracts.telemetry.langfuse_otel_env()` at startup; it builds the OTLP settings from `LANGFUSE_*`. Export with OpenTelemetry, not the Langfuse SDK (the SDK drops non-LLM spans by default).
+- Database: migrations `0001_init.sql`, `0002_audit_dashboard.sql`, `0003_import_fixes.sql` (run in order, before the import), `0004_vector_index.sql` (HNSW, after the import), demo data `supabase/seed.sql`, fake gateway traffic `scripts/demo/fake_gateway_events.sql`.
+- The agent key must start with `tta_`: the gate routes any other Bearer token to user-JWT verification (-> `FORBIDDEN`).
+- Models: embeddings `baai/bge-m3` = `vector(1024)` (same model at import and at query time, `EMBED_DIMS=1024`); LLM `LLM_FAST_MODEL` or `LLM_MODEL` (`deepseek/deepseek-v4.1-flash`), then `LLM_MODEL_FALLBACK` (`anthropic/claude-haiku-5.5`). The agent asks for `response_format: json_object`, retries without optional parameters on HTTP 400, and cleans every field in code (`brain.to_plan`, `brain.to_dishes`): unknown codes and impossible numbers are dropped.
+- Valio availability: a schedule line applies from its date onwards (latest line on or before the delivery day); UTC timestamps are read as Helsinki days; a passed `closingTime` gives `sales_block="cutoff"`.
+- Tracing: `api` and `mcp` call `tta_contracts.telemetry.langfuse_otel_env()` at startup; it builds the OTLP settings from `LANGFUSE_*`. Export with OpenTelemetry, not the Langfuse SDK. Trace `buyer request` (session = request id) holds `step: ...` spans, `llm.plan` / `llm.recipes` / `jev.screen` generations, `mcp.<tool>` calls and the gateway's `gate.call`. Inputs and outputs go in `langfuse.observation.input` / `output` (helper `app.telemetry.io`); `TRACE_CONTENT=0` keeps timings only. Never attach tokens or keys.
 - Grafana (Valio Aimo audit dashboard) runs on http://localhost:3001, outside nginx. It reads only the `wholesaler.v_audit_*` views as role `dashboard_ro` (migration 0002). Never point it at base tables.
 - Every gate decision, including Gate-level rate limits (`RATE_LIMIT`), must write one row to `wholesaler.gateway_events`, or the dashboard cannot show it. Requests rejected with 429 by nginx never reach the gate.
 - Connections: Supabase session pooler allows 15 clients per role by default, shared by the whole team. Keep each service's DB pool at 2 connections max.
@@ -56,7 +64,8 @@ Only edit your own folders. Need a change elsewhere: ask its owner.
 
 - Next.js 16 App Router, `@supabase/ssr`. `proxy.ts` refreshes the session and redirects signed-out users to `/login`; server code verifies with `getClaims()`, never `getSession()`.
 - The browser calls the buyer API on the same origin (`/api/...` through nginx) with `Authorization: Bearer <Supabase access token>` (see `lib/api.ts`).
-- `apps/web/lib/types.ts` is the JSON contract between web and `services/api`: P3 returns exactly these fields.
+- `apps/web/lib/types.ts` is the JSON contract between web and `services/api`: P3 returns exactly these fields. The request page reads the agent feed (`StepItem`, `AskItem`, `DishesItem`, `BasketsItem`, `SayItem`) through `useRequestLive` (SSE, polling fallback) and renders it with `components/Chat.tsx`.
+- Answers are posted as `{question_id, answer (text shown), values (picked option values), other (free text)}`.
 - `NEXT_PUBLIC_*` values are baked in at build time: after changing them run `docker compose up -d --build web`.
 - Local dev without docker: `cd apps/web && npm install && API_PROXY_URL=http://localhost:8080 npm run dev` (needs the `NEXT_PUBLIC_*` vars in `apps/web/.env.local`).
 - Status colours mean the same everywhere: blue `auto` = automatic, orange `human` = needs a person, black `blocked`.
@@ -89,7 +98,10 @@ uv add --editable ../../packages/contracts
 
 ```bash
 docker compose up --build              # buyer app on http://localhost:8080, audit dashboard on http://localhost:3001
+python scripts/check_env.py             # checks .env and every external service, prints no secrets
 python scripts/import/run.py            # one-off data import (from repo root, needs .env); --limit 200 to test
+python scripts/diagnose.py              # why the last request was blocked or slow
+python scripts/rogue_agent.py           # misbehaving agent for the demo; expect 5/5 STOPPED
 uv run pytest                          # inside services/api or services/mcp
 npx @modelcontextprotocol/inspector    # point at http://localhost:8080/mcp with the agent key
 ```

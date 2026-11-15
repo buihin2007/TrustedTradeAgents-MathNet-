@@ -34,7 +34,7 @@ class Settings:
             openrouter_api_key=os.getenv("OPENROUTER_API_KEY", ""),
             llm_model=os.getenv("LLM_MODEL", ""),
             llm_fast_model=os.getenv("LLM_FAST_MODEL", ""),
-            llm_fallback_model=os.getenv("LLM_FALLBACK_MODEL", "anthropic/claude-haiku-5.5"),
+            llm_fallback_model=os.getenv("LLM_MODEL_FALLBACK") or os.getenv("LLM_FALLBACK_MODEL") or "anthropic/claude-haiku-5.5",
             jev_model=os.getenv("JEV_MODEL") or "~typesafe/jev-latest",
             buyer_timezone=os.getenv("BUYER_TIMEZONE") or "Europe/Helsinki",
         )
