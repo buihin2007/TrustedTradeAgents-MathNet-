@@ -98,7 +98,11 @@ export function useRequestLive(id: string) {
         const decoder = new TextDecoder();
         let buffer = "";
         for (;;) {
-          const { value, done } = await reader.read();
+          // The server sends data or a keep-alive every 10 s: a silent stream is a stuck proxy, so poll instead.
+          const { value, done } = await Promise.race([
+            reader.read(),
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error("stalled")), 25000)),
+          ]);
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
           let cut = buffer.indexOf("\n\n");
@@ -116,7 +120,7 @@ export function useRequestLive(id: string) {
           }
         }
       } catch {
-        // fall through to polling
+        controller.abort(); // fall through to polling
       }
       if (!stopped && !finished(last?.status)) await poll();
     })();

@@ -342,7 +342,7 @@ class Brain:
             claims=", ".join(f"{code}={label or code}" for code, label in list(claims.items())[:60]) or "none",
         )
         user = json.dumps({"message": text, "answers": history}, ensure_ascii=False)
-        data = await self._json("llm.plan", system, user, max_tokens=700, timeout=15)
+        data = await self._json("llm.plan", system, user, max_tokens=2000, timeout=15)
         return to_plan(data, today, allergens, claims)
 
     async def recipes(
@@ -377,7 +377,7 @@ class Brain:
             constraints=" ".join(constraints) or "none",
             meal=meal or "a main meal",
         )
-        data = await self._json("llm.recipes", system, task, max_tokens=1800, timeout=40)
+        data = await self._json("llm.recipes", system, task, max_tokens=4000, timeout=40)
         result = to_dishes(data, max(count, len(dishes)) or 3)
         if not result:
             raise LLMUnavailable("The language model returned no usable recipe. Please try again.")

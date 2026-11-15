@@ -79,6 +79,7 @@ REASONS = {
     "JEV_UNSURE": "the gateway's judge was not sure it matches your request",
     "JEV_UNAVAILABLE": "the gateway's judge was unavailable",
 }
+BLOCKING = {"MUST_VIOLATED", "OVER_ORDER_LIMIT", "OVER_WEEKLY_BUDGET", "LOT_SIZE", "JEV_BLOCK"}
 DIET_ALLERGENS = {
     "vegan": ("AM", "AE", "AF", "AC", "UM"),
     "vegetarian": ("AF", "AC", "UM"),
@@ -808,7 +809,8 @@ class Agent:
             await run.finish("held", f"Order is waiting for approval ({reasons_text(order.reasons)}). "
                              "Open Approvals to approve or reject it.", "warn")
         else:
-            await run.finish("blocked", f"The gateway blocked this order: {reasons_text(order.reasons)}.", "error")
+            blocking = [reason for reason in reasons if reason in BLOCKING] or reasons
+            await run.finish("blocked", f"The gateway blocked this order: {reasons_text(blocking)}.", "error")
 
 
 class Tasks:
