@@ -36,7 +36,7 @@ async def test_pipeline_spans_and_audit_share_trace_without_tokens_or_prompts(mo
     attributes = json.dumps([dict(span.attributes) for span in spans])
     assert "private-user-jwt" not in attributes
     assert ("private buyer wording" in attributes) == (content == "1")
-    assert pipeline.attributes["langfuse.trace.name"] == "buyer request"
+    assert pipeline.attributes["langfuse.trace.name"] == "buyer request · start"
     provider.shutdown()
 
 

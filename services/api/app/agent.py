@@ -329,10 +329,16 @@ class Agent:
             return
         run = Run(self, request, profile)
         with self.tracer.start_as_current_span("request.pipeline", record_exception=False) as span:
+            # One buyer request runs as several traces: the first turn, then one per answer. The session
+            # (= request id) groups them in Langfuse; the name says which turn this trace is.
+            last = request.questions[-1] if request.questions and request.questions[-1].answer else None
+            turn = sum(1 for q in request.questions if q.answer) if last else 0
             span.set_attribute("langfuse.session.id", str(request_id))
             span.set_attribute("langfuse.user.id", str(profile.user_id))
-            span.set_attribute("langfuse.trace.name", "buyer request")
-            last = request.questions[-1] if request.questions and request.questions[-1].answer else None
+            name = f"buyer request · answer {turn}" if turn else "buyer request · start"
+            span.set_attribute("langfuse.trace.name", name)
+            span.set_attribute("langfuse.trace.metadata.turn", turn)
+            span.set_attribute("langfuse.trace.tags", ["buyer-request", "answer" if turn else "start"])
             io(span, input={"request": request.text, "answer": decode(last.answer)[2] if last else None})
             run.trace_id = run.trace_id or current_trace_id()
             try:

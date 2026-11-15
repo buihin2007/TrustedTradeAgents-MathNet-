@@ -6,6 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from opentelemetry import trace
 from tta_contracts import (
     ActorType,
     ApproveOrderRequest,
@@ -220,6 +221,11 @@ async def decide_order(
     store: Store,
 ):
     item = await owned_order(store, profile, order_id)
+    # Same Langfuse session as the request that produced the order, so the decision sits next to its turns.
+    span = trace.get_current_span()
+    span.set_attribute("langfuse.session.id", str(item.id))
+    span.set_attribute("langfuse.trace.name", f"buyer decision · {body.action}")
+    span.set_attribute("langfuse.trace.tags", ["buyer-decision", body.action])
     if item.status != "held":
         raise HTTPException(409, "Order is no longer waiting for approval")
     async with request.app.state.gateway.session(user) as gateway:
